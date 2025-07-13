@@ -1,0 +1,26 @@
+[project]
+name = "delta"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "chemprop>=2.2.0",
+    "dask>=2025.5.1",
+    "fsspec[gcs]>=2025.5.1",
+    "ipykernel>=6.29.5",
+    "ipywidgets>=8.1.7",
+    "jinja2>=3.1.6",
+    "lightgbm>=4.6.0",
+    "matplotlib>=3.10.3",
+    "networkx>=3.5",
+    "optuna>=4.4.0",
+    "pandas>=2.3.0",
+    "python-dotenv>=1.1.1",
+    "ray[data,default]>=2.47.1",
+    "rdkit>=2025.3.3",
+    "scikit-learn>=1.7.0",
+    "tensorboard>=2.19.0",
+    "tqdm>=4.67.1",
+    "wandb>=0.21.0",
+]
