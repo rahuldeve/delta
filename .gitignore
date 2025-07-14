@@ -13,3 +13,5 @@ wandb/
 chemprop_delta_clf/
 .env.secret
 *.gexf
+artifacts/
+lightning_logs/
