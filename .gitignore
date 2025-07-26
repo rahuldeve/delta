@@ -15,3 +15,4 @@ chemprop_delta_clf/
 *.gexf
 artifacts/
 lightning_logs/
+chemprop_baseline/
