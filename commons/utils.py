@@ -1,21 +1,25 @@
+import random
 from functools import wraps
 from typing import Callable, Concatenate, ParamSpec
-import random
+
 import numpy as np
 import pandas as pd
 import rdkit.Chem as Chem
-from confidence import delong_confidence_intervals
+import torch
 from joblib import Parallel, delayed
 from rdkit.Chem.Descriptors import CalcMolDescriptors
 from rdkit.Chem.MolStandardize import rdMolStandardize  # type: ignore
+from rdkit.Chem.Scaffolds.MurckoScaffold import MurckoScaffoldSmiles
 from rdkit.rdBase import BlockLogs
 from sklearn import metrics
-from rdkit.Chem.Scaffolds.MurckoScaffold import MurckoScaffoldSmiles
+
+from commons.confidence import delong_confidence_intervals
+
 
 def set_seeds(seed):
     random.seed(seed)
     np.random.seed(seed)
-    # torch.manual_seed(seed)
+    torch.manual_seed(seed)
 
 
 def standardize(smiles):
