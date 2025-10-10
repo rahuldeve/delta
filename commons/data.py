@@ -14,7 +14,6 @@ def load_and_split_gsk_dataset(path, RANDOM_SEED):
     df = pd.read_csv(path)
     df = df.iloc[:, 1:]
     df.columns = ["smiles", "per_inhibition"]
-    df["per_inhibition"] = -df["per_inhibition"]
 
     # standardize and convert to inchi
     df["mol"] = df["smiles"].map(standardize)
