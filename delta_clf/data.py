@@ -27,7 +27,7 @@ class ShuffledPairsDataset(Dataset):
         N = len(self.df)
 
         weights = self.df["per_inhibition"].to_numpy()
-        weights = np.where(weights >= -10, 2.0, 1.0)
+        weights = np.where(weights >= 50, 2.0, 1.0)
         weights = weights / weights.sum()
 
         pairs = [
