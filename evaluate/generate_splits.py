@@ -2,6 +2,7 @@ import pickle
 
 import pandas as pd
 import ray
+import numpy as np
 import rdkit.Chem as Chem
 from rdkit.Chem.Descriptors import CalcMolDescriptors
 from rdkit.Chem.MolStandardize import rdMolStandardize  # type: ignore
@@ -90,28 +91,48 @@ def preprocess(path):
     return df
 
 
-def repeated_5x5_cv(df):
+def generate_repeated_5x2_splits(df):
+    rng = np.random.RandomState(42)
     df = df.copy()
-    cv = GroupKFold(n_splits=5, shuffle=True, random_state=42)
-    for outer_idx in range(5):
-        for inner_idx, (train_idxs, val_test_idxs) in enumerate(
-            cv.split(df, groups=df["cluster"])
-        ):
-            df_train = df.loc[train_idxs].reset_index(drop=True)
-            df_val_test = df.loc[val_test_idxs].reset_index(drop=True)
 
-            val_idxs, test_idxs = next(
-                GroupShuffleSplit(n_splits=1, test_size=0.5).split(
-                    df_val_test, groups=df_val_test["cluster"]
-                )
-            )
+    for outer_idx in range(1, 6):
+        randint = rng.randint(low=0, high=32767)
 
-            df_val = df_val_test.loc[val_idxs].reset_index(drop=True)
-            df_test = df_val_test.loc[test_idxs].reset_index(drop=True)
-            yield f"{outer_idx}x{inner_idx}", (df_train, df_val, df_test)
+        # train: 50%, val: 25%, test: 25%
+        train_idx, val_test_idx = next(
+            GroupShuffleSplit(n_splits=1, test_size=0.5, random_state=randint)
+            .split(df, groups=df["cluster"])
+        )
+
+        df_train = df.loc[train_idx].reset_index(drop=True)
+        df_val_test = df.loc[val_test_idx].reset_index(drop=True)
+
+        val_idx, test_idx = next(
+            GroupShuffleSplit(n_splits=1, test_size=0.5, random_state=randint)
+            .split(df_val_test, groups=df_val_test["cluster"])
+        )
+
+        df_val = df_val_test.loc[val_idx].reset_index(drop=True)
+        df_test = df_val_test.loc[test_idx].reset_index(drop=True)
+
+        yield f"{outer_idx}x1", (df_train.copy(), df_val.copy(), df_test.copy())
 
 
-df = pd.read_csv("../GSK_HepG2.csv")
+        # swap train and val_test
+        df_train, df_val_test = (df_val_test.copy(), df_train.copy())
+
+        val_idx, test_idx = next(
+            GroupShuffleSplit(n_splits=1, test_size=0.5, random_state=randint)
+            .split(df_val_test, groups=df_val_test["cluster"])
+        )
+
+        df_val = df_val_test.loc[val_idx].reset_index(drop=True)
+        df_test = df_val_test.loc[test_idx].reset_index(drop=True)
+
+        yield f"{outer_idx}x2", (df_train.copy(), df_val.copy(), df_test.copy())
+
+
+df = pd.read_csv("./GSK_HepG2.csv")
 df = df.iloc[:, 1:]
 df.columns = ["smiles", "per_inhibition"]
 
@@ -135,11 +156,16 @@ df["cluster"] = pd.Series(clusters)
 df = df.drop(["smiles", "inchi", "scaffold"], axis=1)
 
 
-splits_generator = repeated_5x5_cv(df)
+splits_generator = generate_repeated_5x2_splits(df)
 for split_idx, (df_train, df_val, df_test) in splits_generator:
     df_train["split"] = "train"
     df_val["split"] = "val"
     df_test["split"] = "test"
+
+    df_train = df_train.drop("cluster", axis=1)
+    df_val = df_val.drop("cluster", axis=1)
+    df_test = df_test.drop("cluster", axis=1)
+
     pd.concat([df_train, df_val, df_test]).to_parquet(
-        f"./generated_splits/split_{split_idx}.parquet"
+        f"./evaluate/generated_splits/split_{split_idx}.parquet"
     )
