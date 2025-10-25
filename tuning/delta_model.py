@@ -34,7 +34,7 @@ class Encoder(nn.Module, HyperparametersMixin):
         ignore_list = ["activation"]
         self.save_hyperparameters(ignore=ignore_list)
         self.hparams["activation"] = activation
-        # self.hparams["cls"] = self.__class__
+        self.hparams["cls"] = self.__class__
 
         self.ffn = MLP.build(
             input_dim, output_dim, hidden_dim, n_layers, dropout, activation
