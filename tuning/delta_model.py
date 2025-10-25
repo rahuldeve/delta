@@ -41,7 +41,7 @@ class Encoder(nn.Module, HyperparametersMixin):
         )
 
     def forward(self, Z: Tensor) -> Tensor:
-        return self.ffn[:-1](Z)
+        return self.ffn(Z)
 
     @property
     def input_dim(self):
