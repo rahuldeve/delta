@@ -72,12 +72,12 @@ def seed_worker(worker_id):
 
 
 class RandomPairDataModule(L.LightningDataModule):
-    def __init__(self, mol_ds_train, mol_ds_val) -> None:
+    def __init__(self, mol_ds_train, mol_ds_val, batch_size=32, candidate_size=8) -> None:
         super().__init__()
         self.mol_ds_train: data.MoleculeDataset = mol_ds_train
         self.mol_ds_val: data.MoleculeDataset = mol_ds_val
-        self.batch_size = 32
-        self.candidate_size = 8
+        self.batch_size = batch_size
+        self.candidate_size = candidate_size
 
         self.ds_train = None
         self.ds_val = None
