@@ -32,11 +32,8 @@ class RandomPairDataset(Dataset):
 
     def get_exemplar_candidates(self):
         targets = self.mol_dataset.Y.squeeze()
-        mask = targets > self.binary_threshold
-        weights = np.where(mask, 1.0, 0.0)
-        probs = weights / weights.sum()
         exemplar_idxs = np.random.choice(
-            targets.shape[0], size=(self.n_candidates,), p=probs, replace=False
+            targets.shape[0], size=(self.n_candidates,), replace=False
         )
 
         return [self.mol_dataset[idx] for idx in exemplar_idxs]
@@ -73,10 +70,11 @@ def seed_worker(worker_id):
 
 
 class RandomPairDataModule(L.LightningDataModule):
-    def __init__(self, mol_ds_train, mol_ds_val, batch_size=32, candidate_size=8) -> None:
+    def __init__(self, mol_ds_train, mol_ds_val, binary_threshold, batch_size=32, candidate_size=8) -> None:
         super().__init__()
         self.mol_ds_train: data.MoleculeDataset = mol_ds_train
         self.mol_ds_val: data.MoleculeDataset = mol_ds_val
+        self.binary_threshold = binary_threshold
         self.batch_size = batch_size
         self.candidate_size = candidate_size
 
@@ -84,8 +82,8 @@ class RandomPairDataModule(L.LightningDataModule):
         self.ds_val = None
 
     def setup(self, stage=None):
-        self.ds_train = RandomPairDataset(self.mol_ds_train, self.candidate_size)
-        self.ds_val = RandomPairDataset(self.mol_ds_val, self.candidate_size)
+        self.ds_train = RandomPairDataset(self.mol_ds_train, self.binary_threshold, self.candidate_size)
+        self.ds_val = RandomPairDataset(self.mol_ds_val, self.binary_threshold, self.candidate_size)
 
     def train_dataloader(self):
         assert self.ds_train is not None
