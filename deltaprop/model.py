@@ -141,7 +141,7 @@ class DeltaProp(pl.LightningModule):
     ):
         # left to right loss
         lr_interaction = self.interaction(Z_left, Z_right).squeeze()
-        lr_labels = target_left > target_right  # type: ignore
+        lr_labels = (target_left > target_right).squeeze()  # type: ignore
         lr_loss = self.loss_fn(lr_interaction, lr_labels.float())
 
         # right to left loss
