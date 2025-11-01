@@ -8,15 +8,6 @@ from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.utilities import move_data_to_device
 from ray import tune
 from ray.tune.integration.pytorch_lightning import TuneReportCheckpointCallback
-from sklearn.metrics import (
-    accuracy_score,
-    average_precision_score,
-    balanced_accuracy_score,
-    f1_score,
-    precision_score,
-    recall_score,
-    roc_auc_score,
-)
 from sklearn.preprocessing import StandardScaler
 
 from deltaprop.data import setup_train_val_dataloaders
@@ -139,7 +130,7 @@ def embed_all(mol_dataset: MoleculeDataset, model: DeltaProp, scale_X_d: bool = 
     return all_embeds
 
 
-def evaluate_func(
+def predict_func(
     model: DeltaProp,
     train_mol_ds: MoleculeDataset,
     test_mol_ds: MoleculeDataset,
@@ -163,23 +154,4 @@ def evaluate_func(
         preds = preds.cpu().detach().numpy().squeeze()
         labels = test_mol_ds.Y.squeeze() > binary_threshold
 
-    metric_names = [
-        "accuracy",
-        "balanced_accuracy",
-        "f1",
-        "precision",
-        "recall",
-        "AUCROC",
-        "PRAUC",
-    ]
-    metric_vals = [
-        accuracy_score(labels, preds),
-        balanced_accuracy_score(labels, preds),
-        f1_score(labels, preds),
-        precision_score(labels, preds),
-        recall_score(labels, preds),
-        roc_auc_score(labels, pred_probs),
-        average_precision_score(labels, pred_probs),
-    ]
-
-    return {k: v for k, v in zip(metric_names, metric_vals)}
+    return pred_probs, preds, labels
