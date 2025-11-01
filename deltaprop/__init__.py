@@ -139,7 +139,7 @@ def predict_func(
     model.eval()
 
     train_embeds = embed_all(train_mol_ds, model)
-    test_embeds = embed_all(test_mol_ds, model)
+    test_embeds = embed_all(test_mol_ds, model, scale_X_d=True)
 
     exemplar_idxs = np.argwhere(train_mol_ds.Y.squeeze() > binary_threshold)
     exemplar_embeds = train_embeds[exemplar_idxs].squeeze()
