@@ -53,9 +53,7 @@ def tune_model(
         ),
         run_config=tune.RunConfig(
             checkpoint_config=tune.CheckpointConfig(
-                num_to_keep=2,
-                checkpoint_score_attribute="val_loss",
-                checkpoint_score_order="min",
+                checkpoint_frequency=0,
                 checkpoint_at_end=False,
             ),
             storage_path="/tmp/ray_results",
@@ -64,5 +62,6 @@ def tune_model(
     )
 
     results = tuner.fit()
-    _, best_result = results.get_best_result("val_loss", "min").best_checkpoints[0]  # type: ignore
-    return best_result["config"]
+    metrics = results.get_best_result("val_loss", "min").metrics
+    assert metrics is not None
+    return metrics['config']

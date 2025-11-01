@@ -110,7 +110,7 @@ def tune_func(
                 verbose=False,
                 patience=early_stopping_patience,
             ),
-            TuneReportCheckpointCallback(),
+            TuneReportCheckpointCallback(save_checkpoints=False),
         ],
     )
 
