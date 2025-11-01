@@ -118,7 +118,11 @@ def tune_func(
 
 
 @torch.no_grad()
-def embed_all(mol_dataset: MoleculeDataset, model: DeltaProp):
+def embed_all(mol_dataset: MoleculeDataset, model: DeltaProp, scale_X_d: bool = False):
+    model.eval()
+    if not scale_X_d:
+        model.X_d_transform.train()
+
     dl = torch.utils.data.DataLoader(
         mol_dataset,
         batch_size=64,
