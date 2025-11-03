@@ -33,8 +33,14 @@ class RandomPairDataset(Dataset):
 
     def get_exemplar_candidates(self):
         targets = self.mol_dataset.Y.squeeze()
+        mask = targets > self.binary_threshold
+        weights = np.where(mask, 1.0, 0.0)
+        probs = weights / weights.sum()
         exemplar_idxs = np.random.choice(
-            targets.shape[0], size=(self.n_candidates,), replace=False
+            targets.shape[0], 
+            size=(self.n_candidates,), 
+            p=probs, 
+            replace=False
         )
 
         return [self.mol_dataset[idx] for idx in exemplar_idxs]
