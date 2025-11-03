@@ -129,7 +129,17 @@ class DeltaProp(pl.LightningModule):
     def encoding(
         self, bmg: BatchMolGraph, V_d: Tensor | None = None, X_d: Tensor | None = None
     ) -> Tensor:
-        return self.encoder(self.fingerprint(bmg, V_d, X_d))
+        H_v = self.message_passing(bmg, V_d)
+        H = self.agg(H_v, bmg.batch)
+        H = self.bn(H)
+
+        Z = self.encoder(
+            H if X_d is None 
+            else torch.cat((H, self.X_d_transform(X_d)), dim=1)
+        )
+
+        Z = Z if X_d is None else Z + H
+        return Z
 
     def embed_simple_batch(self, batch: TrainingBatch):
         bmg, V_d, X_d, target, _, _, _ = batch
@@ -364,8 +374,9 @@ def build_model(config, X_d_scaler: StandardScaler | None) -> DeltaProp:
     encoder = Encoder(
         input_dim=ffn_dims,
         hidden_dim=ffn_hidden_dim,
+        output_dim=message_hidden_dim,
         n_layers=ffn_num_layers,
-        activation=torch.nn.ELU(),
+        activation=torch.nn.PReLU(),
         dropout=encoder_dropout,
     )
     interaction = Interaction(encoder.output_dim, dropout=interaction_dropout)
