@@ -4,6 +4,7 @@ import lightning as L
 import numpy as np
 import torch
 from chemprop.data import MoleculeDataset, build_dataloader
+from chemprop.data.dataloader import collate_batch
 from chemprop.models import MPNN
 from chemprop.nn import (
     BinaryClassificationFFN,
@@ -12,8 +13,10 @@ from chemprop.nn import (
     ScaleTransform,
     metrics,
 )
+from ghostml import optimize_threshold_from_predictions
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
+from pytorch_lightning.utilities import move_data_to_device
 from ray import tune
 from ray.tune.integration.pytorch_lightning import TuneReportCheckpointCallback
 from sklearn.preprocessing import StandardScaler
@@ -162,27 +165,47 @@ def tune_func(
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
 
+@torch.no_grad()
+def get_pred_probs(model: MPNN, mol_ds: MoleculeDataset, scale_X_d=False):
+    model.eval()
+    if not scale_X_d:
+        model.X_d_transform.train()
+    
+    dl = torch.utils.data.DataLoader(
+        mol_ds,
+        batch_size=64,
+        shuffle=False,
+        collate_fn=collate_batch,
+    )
+
+    pred_probs = []
+    for batch in dl:
+        batch = move_data_to_device(batch, model.device)
+        bmg, V_d, X_d, _, _, _, _ = batch
+        pred_probs.append(model(bmg, V_d, X_d))
+
+    pred_probs = torch.cat(pred_probs).squeeze().cpu().numpy()
+    return pred_probs
+
+
 def predict_func(
     model: MPNN,
+    binary_classification_threshold: float,
     test_mol_ds: MoleculeDataset,
 ):
-    model.eval()
+    pred_probs = get_pred_probs(model, test_mol_ds, scale_X_d=True)
+    preds = (pred_probs >= binary_classification_threshold).astype(float)
+    return pred_probs, preds
 
-    trainer = L.Trainer(
-        enable_progress_bar=False,
-        accelerator="auto",
-        devices=1,
+
+def tune_binary_classification_threshold(
+    model: MPNN, val_mol_ds: MoleculeDataset, val_labels
+):
+    pred_probs = get_pred_probs(model, val_mol_ds, scale_X_d=False)
+    thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
+
+    optimal_threshold = optimize_threshold_from_predictions(
+        labels=val_labels, probs=pred_probs, thresholds=thresholds
     )
 
-    test_loader = build_dataloader(
-        test_mol_ds, batch_size=64, num_workers=8, shuffle=False
-    )
-
-    test_ds_preds = trainer.predict(model=model, dataloaders=test_loader)
-    test_ds_preds = torch.cat(test_ds_preds)  # type: ignore
-
-    pred_probs = test_ds_preds.squeeze().numpy()
-    preds = (pred_probs >= 0.5).astype(float)
-    labels = test_mol_ds.Y.squeeze()
-
-    return pred_probs, preds, labels
+    return optimal_threshold
