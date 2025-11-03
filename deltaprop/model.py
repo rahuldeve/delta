@@ -342,7 +342,7 @@ class DeltaProp(pl.LightningModule):
         return model
 
 
-def build_model(config, num_mol_feats: int, X_d_scaler: StandardScaler | None) -> DeltaProp:
+def build_model(config, X_d_scaler: StandardScaler | None) -> DeltaProp:
     depth = config["depth"]
     ffn_hidden_dim = config["ffn_hidden_dim"]
     ffn_num_layers = config["ffn_num_layers"]
@@ -350,6 +350,13 @@ def build_model(config, num_mol_feats: int, X_d_scaler: StandardScaler | None) -
     batch_norm = config["batch_norm"]
     encoder_dropout = config["encoder_dropout"]
     interaction_dropout = config["interaction_dropout"]
+
+    if X_d_scaler is not None:
+        X_d_transform = ScaleTransform.from_standard_scaler(X_d_scaler)
+        num_mol_feats = X_d_scaler.n_features_in_
+    else:
+        X_d_transform = None
+        num_mol_feats = 0
 
     mp = BondMessagePassing(d_h=message_hidden_dim, depth=depth) # type: ignore
     agg = NormAggregation()

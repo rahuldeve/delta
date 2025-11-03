@@ -30,8 +30,7 @@ def train_func(
         train_mol_ds, val_mol_ds, binary_threshold, batch_size, config["candidate_size"]
     )
 
-    num_mol_feats = train_mol_ds.X_d.shape[-1] if train_mol_ds is not None else 0
-    model = build_model(config, num_mol_feats, X_d_scaler)
+    model = build_model(config, X_d_scaler)
 
     trainer = L.Trainer(
         logger=None,
@@ -84,8 +83,7 @@ def tune_func(
         train_mol_ds, val_mol_ds, binary_threshold, batch_size, config["candidate_size"]
     )
 
-    num_mol_feats = train_mol_ds.X_d.shape[-1] if train_mol_ds is not None else 0
-    model = build_model(config, num_mol_feats, X_d_scaler)
+    model = build_model(config, X_d_scaler)
 
     trainer = L.Trainer(
         logger=None,

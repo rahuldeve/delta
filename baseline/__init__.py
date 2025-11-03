@@ -27,18 +27,19 @@ def seed_worker(worker_id):
     random.seed(worker_seed)
 
 
-def build_model(config, num_mol_feats: int, X_d_scaler: StandardScaler | None):
+def build_model(config, X_d_scaler: StandardScaler | None):
     depth = config["depth"]
     ffn_hidden_dim = config["ffn_hidden_dim"]
     ffn_num_layers = config["ffn_num_layers"]
     message_hidden_dim = config["message_hidden_dim"]
     batch_norm = config["batch_norm"]
 
-    X_d_transform = (
-        ScaleTransform.from_standard_scaler(X_d_scaler)
-        if X_d_scaler is not None
-        else None
-    )
+    if X_d_scaler is not None:
+        X_d_transform = ScaleTransform.from_standard_scaler(X_d_scaler)
+        num_mol_feats = X_d_scaler.n_features_in_
+    else:
+        X_d_transform = None
+        num_mol_feats = 0
 
     mp = BondMessagePassing(d_h=message_hidden_dim, depth=depth)  # type: ignore
     agg = NormAggregation()
@@ -80,8 +81,7 @@ def train_func(
         val_mol_ds, batch_size=batch_size, num_workers=8, shuffle=False
     )
 
-    num_mol_feats = train_mol_ds.X_d.shape[-1] if train_mol_ds is not None else 0
-    model = build_model(config, num_mol_feats, X_d_scaler)
+    model = build_model(config, X_d_scaler)
 
     trainer = L.Trainer(
         logger=None,
@@ -139,8 +139,7 @@ def tune_func(
         val_mol_ds, batch_size=batch_size, num_workers=8, shuffle=False
     )
 
-    num_mol_feats = train_mol_ds.X_d.shape[-1] if train_mol_ds is not None else 0
-    model = build_model(config, num_mol_feats, X_d_scaler)
+    model = build_model(config, X_d_scaler)
 
     trainer = L.Trainer(
         logger=None,
@@ -180,7 +179,7 @@ def predict_func(
     )
 
     test_ds_preds = trainer.predict(model=model, dataloaders=test_loader)
-    test_ds_preds = torch.cat(test_ds_preds) # type: ignore
+    test_ds_preds = torch.cat(test_ds_preds)  # type: ignore
 
     pred_probs = test_ds_preds.squeeze().numpy()
     preds = (pred_probs >= 0.5).astype(float)
