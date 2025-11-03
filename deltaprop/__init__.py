@@ -153,3 +153,27 @@ def predict_func(
         labels = test_mol_ds.Y.squeeze() > binary_threshold
 
     return pred_probs, preds, labels
+
+
+def tune_binary_classification_threshold(model: DeltaProp, train_mol_ds: MoleculeDataset, val_mol_ds: MoleculeDataset, labels):
+    trainer = L.Trainer(
+        enable_progress_bar=False,
+        accelerator="auto",
+        devices=1,
+    )
+
+    val_loader = build_dataloader(
+        val_mol_ds, batch_size=64, num_workers=8, shuffle=False
+    )
+
+    val_ds_preds = trainer.predict(model=model, dataloaders=val_loader)
+    val_ds_preds = torch.cat(val_ds_preds)  # type: ignore
+
+    pred_probs = val_ds_preds.squeeze().numpy()
+    thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
+
+    optimal_threshold = optimize_threshold_from_predictions(
+        labels=labels, probs=pred_probs, thresholds=thresholds
+    )
+
+    return optimal_threshold
