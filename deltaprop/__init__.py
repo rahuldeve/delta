@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from chemprop.data import MoleculeDataset
 from chemprop.data.dataloader import collate_batch
+from ghostml import optimize_threshold_from_predictions
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.utilities import move_data_to_device
@@ -130,48 +131,50 @@ def embed_all(mol_dataset: MoleculeDataset, model: DeltaProp, scale_X_d: bool = 
 
 def predict_func(
     model: DeltaProp,
+    binary_classification_threshold: float,
     train_mol_ds: MoleculeDataset,
+    exemplar_idxs: list[int],
     test_mol_ds: MoleculeDataset,
-    binary_threshold: float,
 ):
     model.eval()
 
     train_embeds = embed_all(train_mol_ds, model)
     test_embeds = embed_all(test_mol_ds, model, scale_X_d=True)
-
-    exemplar_idxs = np.argwhere(train_mol_ds.Y.squeeze() > binary_threshold)
     exemplar_embeds = train_embeds[exemplar_idxs].squeeze()
 
     with torch.no_grad():
         pred_probs = (
             model.interaction(test_embeds, exemplar_embeds).sigmoid().mean(axis=-1)
         )
-        preds = (pred_probs >= 0.5).float()
+        preds = (pred_probs >= binary_classification_threshold).float()
 
         pred_probs = pred_probs.cpu().detach().numpy().squeeze()
         preds = preds.cpu().detach().numpy().squeeze()
-        labels = test_mol_ds.Y.squeeze() > binary_threshold
 
-    return pred_probs, preds, labels
+    return pred_probs, preds
 
 
-def tune_binary_classification_threshold(model: DeltaProp, train_mol_ds: MoleculeDataset, val_mol_ds: MoleculeDataset, labels):
-    trainer = L.Trainer(
-        enable_progress_bar=False,
-        accelerator="auto",
-        devices=1,
-    )
+def tune_binary_classification_threshold(
+    model: DeltaProp,
+    train_mol_ds: MoleculeDataset,
+    exemplar_idxs: list[int],
+    val_mol_ds: MoleculeDataset,
+    labels,
+):
+    model.eval()
 
-    val_loader = build_dataloader(
-        val_mol_ds, batch_size=64, num_workers=8, shuffle=False
-    )
+    train_embeds = embed_all(train_mol_ds, model)
+    val_embeds = embed_all(val_mol_ds, model)
+    exemplar_embeds = train_embeds[exemplar_idxs].squeeze()
 
-    val_ds_preds = trainer.predict(model=model, dataloaders=val_loader)
-    val_ds_preds = torch.cat(val_ds_preds)  # type: ignore
+    with torch.no_grad():
+        pred_probs = (
+            model.interaction(val_embeds, exemplar_embeds).sigmoid().mean(axis=-1)
+        )
 
-    pred_probs = val_ds_preds.squeeze().numpy()
+        pred_probs = pred_probs.cpu().detach().numpy().squeeze()
+
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
-
     optimal_threshold = optimize_threshold_from_predictions(
         labels=labels, probs=pred_probs, thresholds=thresholds
     )
