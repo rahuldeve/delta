@@ -65,7 +65,7 @@ search_space = {
     "encoder_dropout": tune.uniform(lower=0.0, upper=0.3),
     "interaction_dropout": tune.uniform(lower=0.0, upper=0.3),
     "batch_norm": tune.choice([True, False]),
-    "candidate_size": tune.qrandint(lower=4, upper=32, q=4),
+    "candidate_size": 8,
 }
 
 
