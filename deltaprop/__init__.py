@@ -140,18 +140,24 @@ def predict_func(
 
     train_embeds = embed_all(train_mol_ds, model)
     test_embeds = embed_all(test_mol_ds, model, scale_X_d=True)
-    exemplar_embeds = train_embeds[exemplar_idxs].squeeze()
 
     with torch.no_grad():
         pred_probs = (
-            model.interaction(test_embeds, exemplar_embeds).sigmoid().mean(axis=-1)
+            model.interaction(test_embeds, train_embeds)
+            .sigmoid()
+            .squeeze()
+            .cpu()
+            .numpy()
         )
-        preds = (pred_probs >= binary_classification_threshold).float()
 
-        pred_probs = pred_probs.cpu().detach().numpy().squeeze()
-        preds = preds.cpu().detach().numpy().squeeze()
+    pos_mask = train_mol_ds.Y.squeeze() > 1.5
+    neg_mask = ~pos_mask
+    pos_pred_probs = pred_probs[:, pos_mask].mean(axis=-1)
+    neg_pred_probs = 1 - (1 - pred_probs[:, neg_mask]).mean(axis=-1)
+    mean_pred_probs = (pos_pred_probs + neg_pred_probs) / 2
+    preds = (mean_pred_probs >= binary_classification_threshold).astype(float)
 
-    return pred_probs, preds
+    return mean_pred_probs, preds
 
 
 def tune_binary_classification_threshold(
@@ -165,18 +171,25 @@ def tune_binary_classification_threshold(
 
     train_embeds = embed_all(train_mol_ds, model)
     val_embeds = embed_all(val_mol_ds, model)
-    exemplar_embeds = train_embeds[exemplar_idxs].squeeze()
 
     with torch.no_grad():
         pred_probs = (
-            model.interaction(val_embeds, exemplar_embeds).sigmoid().mean(axis=-1)
+            model.interaction(val_embeds, train_embeds)
+            .sigmoid()
+            .squeeze()
+            .cpu()
+            .numpy()
         )
 
-        pred_probs = pred_probs.cpu().detach().numpy().squeeze()
+    pos_mask = train_mol_ds.Y.squeeze() > 1.5
+    neg_mask = ~pos_mask
+    pos_pred_probs = pred_probs[:, pos_mask].mean(axis=-1)
+    neg_pred_probs = 1 - (1 - pred_probs[:, neg_mask]).mean(axis=-1)
+    mean_pred_probs = (pos_pred_probs + neg_pred_probs) / 2
 
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
     optimal_threshold = optimize_threshold_from_predictions(
-        labels=labels, probs=pred_probs, thresholds=thresholds
+        labels=labels, probs=mean_pred_probs, thresholds=thresholds
     )
 
     return optimal_threshold
