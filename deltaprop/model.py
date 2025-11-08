@@ -6,7 +6,7 @@ from typing import Self
 import torch
 from chemprop.conf import DEFAULT_HIDDEN_DIM
 from chemprop.data import BatchMolGraph, TrainingBatch
-from chemprop.nn import Aggregation, BondMessagePassing, MessagePassing, NormAggregation
+from chemprop.nn import Aggregation, BondMessagePassing, MessagePassing, MeanAggregation
 from chemprop.nn.ffn import MLP
 from chemprop.nn.transforms import ScaleTransform
 from chemprop.schedulers import build_NoamLike_LRSched
@@ -369,7 +369,7 @@ def build_model(config, X_d_scaler: StandardScaler | None) -> DeltaProp:
         num_mol_feats = 0
 
     mp = BondMessagePassing(d_h=message_hidden_dim, depth=depth) # type: ignore
-    agg = NormAggregation()
+    agg = MeanAggregation()
     ffn_dims = mp.output_dim + num_mol_feats
     encoder = Encoder(
         input_dim=ffn_dims,
