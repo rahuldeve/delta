@@ -22,39 +22,39 @@ class RandomPairTrainBatch(NamedTuple):
 
 
 class RandomPairDataset(Dataset):
-    def __init__(self, mol_dataset, binary_threshold, n_candidates):
+    def __init__(self, anchor_dataset, candidate_dataset, binary_threshold, n_candidates):
         super().__init__()
-        self.mol_dataset: data.datasets.MoleculeDataset = mol_dataset
+        self.anchor_dataset: data.datasets.MoleculeDataset = anchor_dataset
+        self.candidate_dataset: data.datasets.MoleculeDataset = candidate_dataset
         self.n_candidates: int = n_candidates
         self.binary_threshold = binary_threshold
 
     def __len__(self):
-        return len(self.mol_dataset)
+        return len(self.anchor_dataset)
 
     def get_exemplar_candidates(self):
-        targets = self.mol_dataset.Y.squeeze()
-        mask = targets > self.binary_threshold
-        weights = np.where(mask, 1.0, 0.0)
-        probs = weights / weights.sum()
-        exemplar_idxs = np.random.choice(
-            targets.shape[0], 
-            size=(self.n_candidates,), 
-            p=probs, 
+        targets = self.candidate_dataset.Y.squeeze()
+        exemplar_mask = targets > self.binary_threshold
+        exemplar_idxs = np.argwhere(exemplar_mask).squeeze()
+
+        selected_idxs = np.random.choice(
+            exemplar_idxs,
+            size=(min(self.n_candidates, exemplar_idxs.shape[0]), ),
             replace=False
         )
 
-        return [self.mol_dataset[idx] for idx in exemplar_idxs]
+        return [self.candidate_dataset[idx] for idx in selected_idxs]
 
     def get_random_candidates(self):
-        targets = self.mol_dataset.Y.squeeze()
+        targets = self.candidate_dataset.Y.squeeze()
         candidate_idxs = np.random.choice(
             targets.shape[0], size=(self.n_candidates,), replace=False
         )
-        return [self.mol_dataset[idx] for idx in candidate_idxs]
+        return [self.candidate_dataset[idx] for idx in candidate_idxs]
 
     def __getitem__(self, idx) -> RandomPairDataPoint:
         return RandomPairDataPoint(
-            self.mol_dataset[idx],
+            self.anchor_dataset[idx],
             (self.get_exemplar_candidates() + self.get_random_candidates()),
         )
 
@@ -84,8 +84,8 @@ def setup_train_val_dataloaders(
     candidate_size: int,
     num_workers: int = 8,
 ):
-    train_pair_ds = RandomPairDataset(train_mol_ds, binary_threshold, candidate_size)
-    val_pair_ds = RandomPairDataset(val_mol_ds, binary_threshold, candidate_size)
+    train_pair_ds = RandomPairDataset(train_mol_ds, train_mol_ds, binary_threshold, candidate_size)
+    val_pair_ds = RandomPairDataset(train_mol_ds, val_mol_ds, binary_threshold, candidate_size)
 
     train_pair_dl = DataLoader(
         train_pair_ds,
