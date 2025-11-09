@@ -170,7 +170,7 @@ def get_pred_probs(model: MPNN, mol_ds: MoleculeDataset, scale_X_d=False):
     model.eval()
     if not scale_X_d:
         model.X_d_transform.train()
-    
+
     dl = torch.utils.data.DataLoader(
         mol_ds,
         batch_size=64,
@@ -205,7 +205,10 @@ def tune_binary_classification_threshold(
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
 
     optimal_threshold = optimize_threshold_from_predictions(
-        labels=val_labels, probs=pred_probs, thresholds=thresholds
+        labels=val_labels,
+        probs=pred_probs,
+        thresholds=thresholds,
+        random_seed=RANDOM_SEED,
     )
 
     return optimal_threshold

@@ -189,7 +189,10 @@ def tune_binary_classification_threshold(
 
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
     optimal_threshold = optimize_threshold_from_predictions(
-        labels=labels, probs=mean_pred_probs, thresholds=thresholds
+        labels=labels,
+        probs=mean_pred_probs,
+        thresholds=thresholds,
+        random_seed=RANDOM_SEED,
     )
 
     return optimal_threshold
