@@ -184,7 +184,7 @@ def tune_binary_classification_threshold(
     pos_mask = train_mol_ds.Y.squeeze() > 1.5
     neg_mask = ~pos_mask
     pos_pred_probs = pred_probs[:, pos_mask].mean(axis=-1)
-    neg_pred_probs = 1 - (1 - pred_probs[:, neg_mask]).mean(axis=-1)
+    neg_pred_probs = pred_probs[:, neg_mask].mean(axis=-1)
     mean_pred_probs = (pos_pred_probs + neg_pred_probs) / 2
 
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
