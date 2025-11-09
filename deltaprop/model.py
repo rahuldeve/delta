@@ -111,6 +111,8 @@ class DeltaProp(pl.LightningModule):
             X_d_transform if X_d_transform is not None else nn.Identity()
         )
 
+        self.ln = nn.LayerNorm(self.encoder.input_dim)
+
         self.warmup_epochs = warmup_epochs
         self.init_lr = init_lr
         self.max_lr = max_lr
@@ -135,7 +137,7 @@ class DeltaProp(pl.LightningModule):
 
         Z = self.encoder(
             H if X_d is None 
-            else torch.cat((H, self.X_d_transform(X_d)), dim=1)
+            else self.ln(torch.cat((H, self.X_d_transform(X_d)), dim=1))
         )
 
         Z = Z if X_d is None else Z + H
