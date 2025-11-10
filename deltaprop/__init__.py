@@ -152,12 +152,12 @@ def predict_func(
 
     pos_mask = train_mol_ds.Y.squeeze() > 1.5
     neg_mask = ~pos_mask
-    pos_pred_probs = pred_probs[:, pos_mask].mean(axis=-1)
-    neg_pred_probs = 1 - (1 - pred_probs[:, neg_mask]).mean(axis=-1)
-    mean_pred_probs = (pos_pred_probs + neg_pred_probs) / 2
-    preds = (mean_pred_probs >= binary_classification_threshold).astype(float)
+    pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
+    neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
+    pred_probs = (pos_contrib + neg_contrib) / 2
+    preds = (pred_probs >= binary_classification_threshold).astype(float)
 
-    return mean_pred_probs, preds
+    return pred_probs, preds
 
 
 def tune_binary_classification_threshold(
@@ -183,14 +183,14 @@ def tune_binary_classification_threshold(
 
     pos_mask = train_mol_ds.Y.squeeze() > 1.5
     neg_mask = ~pos_mask
-    pos_pred_probs = pred_probs[:, pos_mask].mean(axis=-1)
-    neg_pred_probs = pred_probs[:, neg_mask].mean(axis=-1)
-    mean_pred_probs = (pos_pred_probs + neg_pred_probs) / 2
+    pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
+    neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
+    pred_probs = (pos_contrib + neg_contrib) / 2
 
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
     optimal_threshold = optimize_threshold_from_predictions(
         labels=labels,
-        probs=mean_pred_probs,
+        probs=pred_probs,
         thresholds=thresholds,
         random_seed=RANDOM_SEED,
     )
