@@ -45,17 +45,22 @@ class RandomPairDataset(Dataset):
 
         return [self.candidate_dataset[idx] for idx in selected_idxs]
 
-    def get_random_candidates(self):
+    def get_random_candidates(self, n):
         targets = self.candidate_dataset.Y.squeeze()
+        exemplar_mask = targets > self.binary_threshold
+        non_exemplar_idxs = np.argwhere(~exemplar_mask).squeeze()
+
         candidate_idxs = np.random.choice(
-            targets.shape[0], size=(self.n_candidates,), replace=False
+            non_exemplar_idxs, size=(n,), replace=False
         )
         return [self.candidate_dataset[idx] for idx in candidate_idxs]
 
     def __getitem__(self, idx) -> RandomPairDataPoint:
+        exemplar_idxs = self.get_exemplar_candidates()
+        random_idxs = self.get_random_candidates(2*self.n_candidates - len(exemplar_idxs))
         return RandomPairDataPoint(
             self.anchor_dataset[idx],
-            (self.get_exemplar_candidates() + self.get_random_candidates()),
+            exemplar_idxs + random_idxs,
         )
 
     @staticmethod
