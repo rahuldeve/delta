@@ -14,7 +14,8 @@ from sklearn.preprocessing import StandardScaler
 from deltaprop.data import setup_train_val_dataloaders
 from deltaprop.model import DeltaProp, build_model
 from utils import RANDOM_SEED, set_seeds
-
+from sklearn.isotonic import IsotonicRegression
+from scipy.interpolate import interp1d
 
 def train_func(
     config,
@@ -129,6 +130,25 @@ def embed_all(mol_dataset: MoleculeDataset, model: DeltaProp, scale_X_d: bool = 
     return all_embeds
 
 
+
+def get_prob(vals, tail_probs, binary_threshold):
+    sort_idxs = np.argsort(vals)
+    X = vals[sort_idxs]
+    Y = tail_probs[sort_idxs]
+    reg = IsotonicRegression(increasing=False, y_min=0, y_max=1.0)
+    adj_Y = reg.fit_transform(X, Y)
+    f = interp1d(X, adj_Y, kind="linear")
+    return f(binary_threshold)
+
+
+def get_interpolate_prob(pred_prob, exemplar_vals, binary_threshold):
+    probs = []
+    for idx in range(pred_prob.shape[0]):
+        probs.append(get_prob(exemplar_vals, pred_prob[idx], binary_threshold))
+
+    return np.array(probs)
+
+
 def predict_func(
     model: DeltaProp,
     binary_classification_threshold: float,
@@ -150,11 +170,7 @@ def predict_func(
             .numpy()
         )
 
-    pos_mask = train_mol_ds.Y.squeeze() > 1.5
-    neg_mask = ~pos_mask
-    pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
-    neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
-    pred_probs = (pos_contrib + neg_contrib) / 2
+    pred_probs = get_interpolate_prob(pred_probs, train_mol_ds.Y.squeeze(), binary_threshold=1.5)
     preds = (pred_probs >= binary_classification_threshold).astype(float)
 
     return pred_probs, preds
@@ -181,11 +197,7 @@ def tune_binary_classification_threshold(
             .numpy()
         )
 
-    pos_mask = train_mol_ds.Y.squeeze() > 1.5
-    neg_mask = ~pos_mask
-    pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
-    neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
-    pred_probs = (pos_contrib + neg_contrib) / 2
+    pred_probs = get_interpolate_prob(pred_probs, train_mol_ds.Y.squeeze(), binary_threshold=1.5)
 
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
     optimal_threshold = optimize_threshold_from_predictions(
