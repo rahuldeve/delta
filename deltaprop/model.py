@@ -5,17 +5,19 @@ from typing import Self
 
 import torch
 from chemprop.conf import DEFAULT_HIDDEN_DIM
-from chemprop.data import BatchMolGraph, TrainingBatch
-from chemprop.nn import Aggregation, BondMessagePassing, MessagePassing, MeanAggregation
+from chemprop.data import BatchMolGraph, MoleculeDataset, TrainingBatch
+from chemprop.data.dataloader import collate_batch
+from chemprop.nn import Aggregation, BondMessagePassing, MeanAggregation, MessagePassing
 from chemprop.nn.ffn import MLP
 from chemprop.nn.transforms import ScaleTransform
 from chemprop.schedulers import build_NoamLike_LRSched
 from lightning import pytorch as pl
 from lightning.pytorch.core.mixins.hparams_mixin import HyperparametersMixin
+from pytorch_lightning.utilities import move_data_to_device
 from sklearn.preprocessing import StandardScaler
 from torch import Tensor, nn, optim
 
-from deltaprop.data import RandomPairTrainBatch
+from deltaprop.data import RandomPairDataModule, RandomPairTrainBatch
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +138,8 @@ class DeltaProp(pl.LightningModule):
         H = self.bn(H)
 
         Z = self.encoder(
-            H if X_d is None 
+            H
+            if X_d is None
             else self.ln(torch.cat((H, self.X_d_transform(X_d)), dim=1))
         )
 
@@ -178,8 +181,8 @@ class DeltaProp(pl.LightningModule):
         Z_anchor = Z_anchor.view(B, 1, -1)  # (B, d) -> (B, 1, d)
         Z_candidates = Z_candidates.view(B, C, -1)  # (B*C, d) -> (B, C, d)
 
-        target_anchor = target_anchor.view(-1, 1) # type: ignore
-        target_candidates = target_candidates.view(B, C) # type: ignore
+        target_anchor = target_anchor.view(-1, 1)  # type: ignore
+        target_candidates = target_candidates.view(B, C)  # type: ignore
 
         (sym_loss, lr_loss, rl_loss) = self.bidirectional_interaction_loss(
             Z_anchor, Z_candidates, target_anchor, target_candidates
@@ -190,8 +193,8 @@ class DeltaProp(pl.LightningModule):
 
     def on_validation_model_eval(self) -> None:
         self.eval()
-        self.message_passing.V_d_transform.train() # type: ignore
-        self.message_passing.graph_transform.train() # type: ignore
+        self.message_passing.V_d_transform.train()  # type: ignore
+        self.message_passing.graph_transform.train()  # type: ignore
         self.X_d_transform.train()
 
     def training_step(self, batch: RandomPairTrainBatch, batch_idx):  # type: ignore
@@ -254,7 +257,13 @@ class DeltaProp(pl.LightningModule):
         self.log("val_loss", loss, batch_size=batch.B, prog_bar=True, on_epoch=True)
         return loss
 
-    def configure_optimizers(self): # type: ignore
+    def on_train_epoch_start(self):
+        mine_hard_negative_candidates_train(self, self.trainer.datamodule) # type: ignore
+
+    def on_validation_epoch_start(self):
+        mine_hard_negative_candidates_train(self, self.trainer.datamodule) # type: ignore
+
+    def configure_optimizers(self):  # type: ignore
         opt = optim.Adam(self.parameters(), self.init_lr)
         if self.trainer.train_dataloader is None:
             # Loading `train_dataloader` to estimate number of training batches.
@@ -294,8 +303,8 @@ class DeltaProp(pl.LightningModule):
             logger.error(f"{traceback.format_exc()}")
 
         try:
-            hparams = d["hyper_parameters"] # type: ignore
-            state_dict = d["state_dict"] # type: ignore
+            hparams = d["hyper_parameters"]  # type: ignore
+            state_dict = d["state_dict"]  # type: ignore
         except KeyError:
             raise KeyError(
                 f"Could not find hyper parameters and/or state dict in {path}."
@@ -328,7 +337,7 @@ class DeltaProp(pl.LightningModule):
         )
         kwargs.update(submodules)
 
-        d = torch.load(checkpoint_path, map_location, weights_only=False) # type: ignore
+        d = torch.load(checkpoint_path, map_location, weights_only=False)  # type: ignore
         d["state_dict"] = state_dict
         d["hyper_parameters"] = hparams
         buffer = io.BytesIO()
@@ -370,7 +379,7 @@ def build_model(config, X_d_scaler: StandardScaler | None) -> DeltaProp:
         X_d_transform = None
         num_mol_feats = 0
 
-    mp = BondMessagePassing(d_h=message_hidden_dim, depth=depth) # type: ignore
+    mp = BondMessagePassing(d_h=message_hidden_dim, depth=depth)  # type: ignore
     agg = MeanAggregation()
     ffn_dims = mp.output_dim + num_mol_feats
     encoder = Encoder(
@@ -383,7 +392,6 @@ def build_model(config, X_d_scaler: StandardScaler | None) -> DeltaProp:
     )
     interaction = Interaction(encoder.output_dim, dropout=interaction_dropout)
 
-    
     X_d_transform = (
         ScaleTransform.from_standard_scaler(X_d_scaler)
         if X_d_scaler is not None
@@ -399,3 +407,76 @@ def build_model(config, X_d_scaler: StandardScaler | None) -> DeltaProp:
     )
 
     return model
+
+
+@torch.no_grad()
+def embed_all(mol_dataset: MoleculeDataset, model: DeltaProp, scale_X_d: bool = False):
+    model.eval()
+    if not scale_X_d:
+        model.X_d_transform.train()
+
+    dl = torch.utils.data.DataLoader(
+        mol_dataset,
+        batch_size=64,
+        shuffle=False,
+        collate_fn=collate_batch,
+    )
+    all_embeds = []
+    for batch in dl:
+        batch = move_data_to_device(batch, model.device)
+        res = model.embed_simple_batch(batch)
+        all_embeds.append(res["embeds"])
+
+    all_embeds = torch.cat(all_embeds)
+    return all_embeds
+
+
+@torch.no_grad()
+def mine_hard_negative_candidates_train(model: DeltaProp, datamodule: RandomPairDataModule):
+    train_mol_ds = datamodule.train_ds.anchor_dataset
+    train_embeds = embed_all(train_mol_ds, model)
+
+    interactions = (
+        model.interaction(train_embeds, train_embeds).sigmoid().squeeze().cpu()
+    )
+
+    reference = torch.from_numpy(train_mol_ds.Y > train_mol_ds.Y.T)
+    negatives = torch.logical_xor(interactions > 0.5, reference)
+
+    hard_neg_idxs = []
+    for i in range(negatives.shape[0]):
+        idxs = torch.argwhere(negatives[i]).squeeze().tolist()
+        if isinstance(idxs, int):
+            idxs = [idxs]
+        
+        hard_neg_idxs.append(idxs)
+
+    
+    datamodule.train_ds.hard_neg_idxs = hard_neg_idxs
+
+
+@torch.no_grad()
+def mine_hard_negative_candidates_val(model: DeltaProp, datamodule: RandomPairDataModule):
+    train_mol_ds = datamodule.train_ds.anchor_dataset
+    train_embeds = embed_all(train_mol_ds, model)
+
+    val_mol_ds = datamodule.val_ds.anchor_dataset
+    val_embeds = embed_all(val_mol_ds, model)
+
+    interactions = (
+        model.interaction(train_embeds, val_embeds).sigmoid().squeeze().cpu()
+    )
+
+    reference = torch.from_numpy(train_mol_ds.Y > val_mol_ds.Y.T)
+    negatives = torch.logical_xor(interactions > 0.5, reference)
+
+    hard_neg_idxs = []
+    for i in range(negatives.shape[0]):
+        idxs = torch.argwhere(negatives[i]).squeeze().tolist()
+        if isinstance(idxs, int):
+            idxs = [idxs]
+        
+        hard_neg_idxs.append(idxs)
+
+    
+    datamodule.val_ds.hard_neg_idxs = hard_neg_idxs

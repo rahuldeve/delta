@@ -2,20 +2,19 @@ import lightning as L
 import numpy as np
 import torch
 from chemprop.data import MoleculeDataset
-from chemprop.data.dataloader import collate_batch
 from ghostml import optimize_threshold_from_predictions
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
-from pytorch_lightning.utilities import move_data_to_device
 from ray import tune
 from ray.tune.integration.pytorch_lightning import TuneReportCheckpointCallback
+from scipy.interpolate import interp1d
+from sklearn.isotonic import IsotonicRegression
 from sklearn.preprocessing import StandardScaler
 
-from deltaprop.data import setup_train_val_dataloaders
-from deltaprop.model import DeltaProp, build_model
+from deltaprop.data import RandomPairDataModule, setup_train_val_dataloaders
+from deltaprop.model import DeltaProp, build_model, embed_all
 from utils import RANDOM_SEED, set_seeds
-from sklearn.isotonic import IsotonicRegression
-from scipy.interpolate import interp1d
+
 
 def train_func(
     config,
@@ -28,8 +27,13 @@ def train_func(
     early_stopping_patience: int = 10,
 ):
     set_seeds(RANDOM_SEED)
-    train_dl, val_dl = setup_train_val_dataloaders(
-        train_mol_ds, val_mol_ds, binary_threshold, batch_size, config["candidate_size"]
+
+    datamodule = RandomPairDataModule(
+        train_mol_ds=train_mol_ds, 
+        val_mol_ds=val_mol_ds,
+        binary_threshold=binary_threshold,
+        batch_size=batch_size,
+        candidate_size=config['candidate_size']
     )
 
     model = build_model(config, X_d_scaler)
@@ -42,6 +46,7 @@ def train_func(
         devices=1,
         max_epochs=max_epochs,
         num_sanity_val_steps=0,
+        reload_dataloaders_every_n_epochs=1,
         callbacks=[
             EarlyStopping(
                 monitor="val_loss",
@@ -53,7 +58,7 @@ def train_func(
         ],
     )
 
-    trainer.fit(model, train_dataloaders=train_dl, val_dataloaders=val_dl)
+    trainer.fit(model, datamodule=datamodule)
     model = DeltaProp.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)  # type: ignore
     return model
 
@@ -108,29 +113,6 @@ def tune_func(
     trainer.fit(model, train_dataloaders=train_dl, val_dataloaders=val_dl)
 
 
-@torch.no_grad()
-def embed_all(mol_dataset: MoleculeDataset, model: DeltaProp, scale_X_d: bool = False):
-    model.eval()
-    if not scale_X_d:
-        model.X_d_transform.train()
-
-    dl = torch.utils.data.DataLoader(
-        mol_dataset,
-        batch_size=64,
-        shuffle=False,
-        collate_fn=collate_batch,
-    )
-    all_embeds = []
-    for batch in dl:
-        batch = move_data_to_device(batch, model.device)
-        res = model.embed_simple_batch(batch)
-        all_embeds.append(res["embeds"])
-
-    all_embeds = torch.cat(all_embeds)
-    return all_embeds
-
-
-
 def get_prob(vals, tail_probs, binary_threshold):
     sort_idxs = np.argsort(vals)
     X = vals[sort_idxs]
@@ -170,7 +152,9 @@ def predict_func(
             .numpy()
         )
 
-    pred_probs = get_interpolate_prob(pred_probs, train_mol_ds.Y.squeeze(), binary_threshold=1.5)
+    pred_probs = get_interpolate_prob(
+        pred_probs, train_mol_ds.Y.squeeze(), binary_threshold=1.5
+    )
     preds = (pred_probs >= binary_classification_threshold).astype(float)
 
     return pred_probs, preds
@@ -197,7 +181,9 @@ def tune_binary_classification_threshold(
             .numpy()
         )
 
-    pred_probs = get_interpolate_prob(pred_probs, train_mol_ds.Y.squeeze(), binary_threshold=1.5)
+    pred_probs = get_interpolate_prob(
+        pred_probs, train_mol_ds.Y.squeeze(), binary_threshold=1.5
+    )
 
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
     optimal_threshold = optimize_threshold_from_predictions(
