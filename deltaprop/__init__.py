@@ -109,7 +109,7 @@ def tune_func(
 
 
 @torch.no_grad()
-def embed_all(mol_dataset: MoleculeDataset, model: DeltaProp, scale_X_d: bool = False):
+def left_embed_all(mol_dataset: MoleculeDataset, model: DeltaProp, scale_X_d: bool = False):
     model.eval()
     if not scale_X_d:
         model.X_d_transform.train()
@@ -123,7 +123,29 @@ def embed_all(mol_dataset: MoleculeDataset, model: DeltaProp, scale_X_d: bool = 
     all_embeds = []
     for batch in dl:
         batch = move_data_to_device(batch, model.device)
-        res = model.embed_simple_batch(batch)
+        res = model.left_embed_simple_batch(batch)
+        all_embeds.append(res["embeds"])
+
+    all_embeds = torch.cat(all_embeds)
+    return all_embeds
+
+
+@torch.no_grad()
+def right_embed_all(mol_dataset: MoleculeDataset, model: DeltaProp, scale_X_d: bool = False):
+    model.eval()
+    if not scale_X_d:
+        model.X_d_transform.train()
+
+    dl = torch.utils.data.DataLoader(
+        mol_dataset,
+        batch_size=64,
+        shuffle=False,
+        collate_fn=collate_batch,
+    )
+    all_embeds = []
+    for batch in dl:
+        batch = move_data_to_device(batch, model.device)
+        res = model.right_embed_simple_batch(batch)
         all_embeds.append(res["embeds"])
 
     all_embeds = torch.cat(all_embeds)
@@ -158,8 +180,8 @@ def predict_func(
 ):
     model.eval()
 
-    train_embeds = embed_all(train_mol_ds, model)
-    test_embeds = embed_all(test_mol_ds, model, scale_X_d=True)
+    train_embeds = right_embed_all(train_mol_ds, model)
+    test_embeds = left_embed_all(test_mol_ds, model, scale_X_d=True)
 
     with torch.no_grad():
         pred_probs = (
@@ -170,7 +192,11 @@ def predict_func(
             .numpy()
         )
 
-    pred_probs = get_interpolate_prob(pred_probs, train_mol_ds.Y.squeeze(), binary_threshold=1.5)
+    pos_mask = train_mol_ds.Y.squeeze() > 1.5
+    neg_mask = ~pos_mask
+    pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
+    neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
+    pred_probs = (pos_contrib + neg_contrib) / 2
     preds = (pred_probs >= binary_classification_threshold).astype(float)
 
     return pred_probs, preds
@@ -185,8 +211,8 @@ def tune_binary_classification_threshold(
 ):
     model.eval()
 
-    train_embeds = embed_all(train_mol_ds, model)
-    val_embeds = embed_all(val_mol_ds, model)
+    train_embeds = right_embed_all(train_mol_ds, model)
+    val_embeds = left_embed_all(val_mol_ds, model)
 
     with torch.no_grad():
         pred_probs = (
@@ -197,7 +223,11 @@ def tune_binary_classification_threshold(
             .numpy()
         )
 
-    pred_probs = get_interpolate_prob(pred_probs, train_mol_ds.Y.squeeze(), binary_threshold=1.5)
+    pos_mask = train_mol_ds.Y.squeeze() > 1.5
+    neg_mask = ~pos_mask
+    pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
+    neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
+    pred_probs = (pos_contrib + neg_contrib) / 2
 
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
     optimal_threshold = optimize_threshold_from_predictions(

@@ -52,83 +52,45 @@ class Encoder(nn.Module, HyperparametersMixin):
     @property
     def output_dim(self):
         return self.ffn.output_dim
+    
 
-
-class Interaction(torch.nn.Module, HyperparametersMixin):
-    def __init__(self, ndims: int, dropout: float = 0.0) -> None:
-        super().__init__()
-        self.save_hyperparameters()
-        self.hparams["cls"] = self.__class__
-
-        self.interaction_matrix = torch.nn.Linear(ndims, ndims, bias=False)
-        self.head_dropout = torch.nn.Dropout(dropout)
-
-    def forward(self, head_emb: Tensor, tail_emb: Tensor):
-        R = self.interaction_matrix.weight.unsqueeze(0)
-        z = self.head_dropout(head_emb @ R) @ tail_emb.transpose(-2, -1)
-        return z.squeeze()
-
-
-class DeltaProp(pl.LightningModule):
+class Stack(torch.nn.Module, HyperparametersMixin):
     def __init__(
-        self,
+        self, 
         message_passing: MessagePassing,
         agg: Aggregation,
         encoder: Encoder,
-        interaction: Interaction,
         batch_norm: bool = False,
-        warmup_epochs: int = 2,
-        init_lr: float = 1e-4,
-        max_lr: float = 1e-3,
-        final_lr: float = 1e-4,
-        X_d_transform: ScaleTransform | None = None,
+        # X_d_transform: ScaleTransform | None = None
     ) -> None:
         super().__init__()
         self.save_hyperparameters(
-            ignore=["X_d_transform", "message_passing", "agg", "encoder", "interaction"]
+            ignore=["message_passing", "agg", "encoder"]
         )
-        self.hparams["X_d_transform"] = X_d_transform
+
+        self.hparams["cls"] = self.__class__
+        # self.hparams["X_d_transform"] = X_d_transform
         self.hparams.update(
             {
                 "message_passing": message_passing.hparams,
                 "agg": agg.hparams,
                 "encoder": encoder.hparams,
-                "interaction": interaction.hparams,
             }
         )
 
         self.message_passing = message_passing
         self.agg = agg
         self.encoder = encoder
-        self.interaction = interaction
 
         self.bn = (
             nn.BatchNorm1d(self.message_passing.output_dim)
             if batch_norm
             else nn.Identity()
         )
-        self.X_d_transform = (
-            X_d_transform if X_d_transform is not None else nn.Identity()
-        )
 
         self.ln = nn.LayerNorm(self.encoder.input_dim)
 
-        self.warmup_epochs = warmup_epochs
-        self.init_lr = init_lr
-        self.max_lr = max_lr
-        self.final_lr = final_lr
-
-        self.loss_fn = nn.BCEWithLogitsLoss()
-
-    def fingerprint(
-        self, bmg: BatchMolGraph, V_d: Tensor | None = None, X_d: Tensor | None = None
-    ) -> Tensor:
-        H_v = self.message_passing(bmg, V_d)
-        H = self.agg(H_v, bmg.batch)
-        H = self.bn(H)
-        return H if X_d is None else torch.cat((H, self.X_d_transform(X_d)), dim=1)
-
-    def encoding(
+    def forward(
         self, bmg: BatchMolGraph, V_d: Tensor | None = None, X_d: Tensor | None = None
     ) -> Tensor:
         H_v = self.message_passing(bmg, V_d)
@@ -137,26 +99,111 @@ class DeltaProp(pl.LightningModule):
 
         Z = self.encoder(
             H if X_d is None 
-            else self.ln(torch.cat((H, self.X_d_transform(X_d)), dim=1))
+            else self.ln(torch.cat((H, X_d), dim=1))
         )
 
-        Z = Z if X_d is None else Z + H
-        return Z
+        return Z + H
 
-    def embed_simple_batch(self, batch: TrainingBatch):
+
+class Interaction(torch.nn.Module, HyperparametersMixin):
+    def __init__(self, ndims: int, dropout: float = 0.0) -> None:
+        super().__init__()
+        self.save_hyperparameters()
+        self.hparams["cls"] = self.__class__
+
+        # self.interaction_matrix = torch.nn.Linear(ndims, ndims, bias=False)
+        self.head_dropout = torch.nn.Dropout(dropout)
+
+    def forward(self, head_emb: Tensor, tail_emb: Tensor):
+        # R = self.interaction_matrix.weight.unsqueeze(0)
+        z = head_emb @ tail_emb.transpose(-2, -1)
+        return z.squeeze()
+
+
+class DeltaProp(pl.LightningModule):
+    def __init__(
+        self,
+        left_encoder: Stack,
+        right_encoder: Stack,
+        interaction: Interaction,
+        warmup_epochs: int = 2,
+        init_lr: float = 1e-4,
+        max_lr: float = 1e-3,
+        final_lr: float = 1e-4,
+        X_d_transform: ScaleTransform | None = None,
+    ) -> None:
+        super().__init__()
+        self.save_hyperparameters(
+            ignore=["X_d_transform", "left_encoder", "right_encoder", "interaction"]
+        )
+        self.hparams["X_d_transform"] = X_d_transform
+        self.hparams.update(
+            {
+                "left_encoder": left_encoder.hparams,
+                "right_encoder": right_encoder.hparams,
+                "interaction": interaction.hparams
+            }
+        )
+
+        self.left_encoder = left_encoder
+        self.right_encoder = right_encoder
+        self.interaction = interaction
+
+        self.X_d_transform = (
+            X_d_transform if X_d_transform is not None else nn.Identity()
+        )
+
+        self.warmup_epochs = warmup_epochs
+        self.init_lr = init_lr
+        self.max_lr = max_lr
+        self.final_lr = final_lr
+
+        self.loss_fn = nn.BCEWithLogitsLoss()
+
+    def left_encoding(
+        self, bmg: BatchMolGraph, V_d: Tensor | None = None, X_d: Tensor | None = None
+    ) -> Tensor:
+        return self.left_encoder(bmg, V_d, self.X_d_transform(X_d))
+    
+    def right_encoding(
+        self, bmg: BatchMolGraph, V_d: Tensor | None = None, X_d: Tensor | None = None
+    ) -> Tensor:
+        return self.right_encoder(bmg, V_d, self.X_d_transform(X_d))
+
+    def left_embed_simple_batch(self, batch: TrainingBatch):
         bmg, V_d, X_d, target, _, _, _ = batch
-        Z = self.encoding(bmg, V_d, X_d)
+        Z = self.left_encoding(bmg, V_d, X_d)
+        return dict(embeds=Z, targets=target)
+    
+    def right_embed_simple_batch(self, batch: TrainingBatch):
+        bmg, V_d, X_d, target, _, _, _ = batch
+        Z = self.right_encoding(bmg, V_d, X_d)
         return dict(embeds=Z, targets=target)
 
-    def bidirectional_interaction_loss(
-        self, Z_left, Z_right, target_left, target_right
-    ):
-        # left to right loss
+    def bidirectional_interaction_loss(self, batch):   
+        B, C = batch.B, batch.C
+        bmg_anchor, V_d_anchor, X_d_anchor, target_anchor, _, _, _ = batch.anchor
+        bmg_candidates, V_d_candidates, X_d_candidates, target_candidates, _, _, _ = batch.candidates
+        
+        # anchor to candidate loss
+        Z_left = self.left_encoding(bmg_anchor, V_d_anchor, X_d_anchor).view(B, 1, -1)  # (B, d) -> (B, 1, d)
+        Z_right = self.right_encoding(bmg_candidates, V_d_candidates, X_d_candidates).view(B, C, -1)  # (B*C, d) -> (B, C, d)
+
+        target_left = target_anchor.view(-1, 1) # type: ignore
+        target_right = target_candidates.view(B, C) # type: ignore
+
         lr_interaction = self.interaction(Z_left, Z_right).squeeze()
         lr_labels = (target_left > target_right).squeeze()  # type: ignore
         lr_loss = self.loss_fn(lr_interaction, lr_labels.float())
 
-        # right to left loss
+
+        # candidate to anchor loss
+        Z_left = self.left_encoding(bmg_candidates, V_d_candidates, X_d_candidates).view(B, C, -1)  # (B*C, d) -> (B, C, d)
+        Z_right = self.right_encoding(bmg_anchor, V_d_anchor, X_d_anchor).view(B, 1, -1)  # (B, d) -> (B, 1, d)
+
+        target_left = target_candidates.view(B, C) # type: ignore
+        target_right = target_anchor.view(-1, 1) # type: ignore
+
         rl_interaction = self.interaction(Z_right, Z_left).squeeze()
         rl_labels = ~lr_labels  # type: ignore
         rl_loss = self.loss_fn(rl_interaction, rl_labels.float())
@@ -167,31 +214,18 @@ class DeltaProp(pl.LightningModule):
         return symm_loss, lr_loss, rl_loss
 
     def get_losses(self, batch: RandomPairTrainBatch):
-        B, C = batch.B, batch.C
 
-        bmg, V_d, X_d, target_anchor, _, _, _ = batch.anchor
-        Z_anchor = self.encoding(bmg, V_d, X_d)
-
-        bmg, V_d, X_d, target_candidates, _, _, _ = batch.candidates
-        Z_candidates = self.encoding(bmg, V_d, X_d)
-
-        Z_anchor = Z_anchor.view(B, 1, -1)  # (B, d) -> (B, 1, d)
-        Z_candidates = Z_candidates.view(B, C, -1)  # (B*C, d) -> (B, C, d)
-
-        target_anchor = target_anchor.view(-1, 1) # type: ignore
-        target_candidates = target_candidates.view(B, C) # type: ignore
-
-        (sym_loss, lr_loss, rl_loss) = self.bidirectional_interaction_loss(
-            Z_anchor, Z_candidates, target_anchor, target_candidates
-        )
+        (sym_loss, lr_loss, rl_loss) = self.bidirectional_interaction_loss(batch)
 
         loss = (sym_loss + lr_loss + rl_loss) / 3
         return loss, (sym_loss, lr_loss, rl_loss)
 
     def on_validation_model_eval(self) -> None:
         self.eval()
-        self.message_passing.V_d_transform.train() # type: ignore
-        self.message_passing.graph_transform.train() # type: ignore
+        self.left_encoder.message_passing.V_d_transform.train() # type: ignore
+        self.left_encoder.message_passing.graph_transform.train() # type: ignore
+        self.right_encoder.message_passing.V_d_transform.train() # type: ignore
+        self.right_encoder.message_passing.graph_transform.train() # type: ignore
         self.X_d_transform.train()
 
     def training_step(self, batch: RandomPairTrainBatch, batch_idx):  # type: ignore
@@ -301,10 +335,31 @@ class DeltaProp(pl.LightningModule):
                 f"Could not find hyper parameters and/or state dict in {path}."
             )
 
-        submodules |= {
-            key: hparams[key].pop("cls")(**hparams[key])
-            for key in ("message_passing", "agg", "encoder", "interaction")
-            if key not in submodules
+        left_encoder_submodules = {
+            key: hparams["left_encoder"][key].pop("cls")(**hparams["left_encoder"][key])
+            for key in ("message_passing", "agg", "encoder")
+        }
+
+        left_encoder = {
+            "left_encoder": hparams["left_encoder"].pop("cls")(**left_encoder_submodules)
+        }
+
+        right_encoder_submodules = {
+            key: hparams["right_encoder"][key].pop("cls")(**hparams["right_encoder"][key])
+            for key in ("message_passing", "agg", "encoder")
+        }
+
+        right_encoder = {
+            "right_encoder": hparams["right_encoder"].pop("cls")(**right_encoder_submodules)
+        }
+
+        interaction = {
+            "interaction": hparams["interaction"].pop("cls")(**hparams["interaction"])
+        }
+
+        submodules = {
+            k:v for k,v in (left_encoder | right_encoder | interaction).items()
+            if k not in submodules
         }
 
         return submodules, state_dict, hparams
@@ -321,7 +376,7 @@ class DeltaProp(pl.LightningModule):
         submodules = {
             k: v
             for k, v in kwargs.items()
-            if k in ["message_passing", "agg", "predictor"]
+            if k in ["left_encoder", "right_encoder", "interaction"]
         }
         submodules, state_dict, hparams = cls._load(
             checkpoint_path, map_location, **submodules
@@ -334,7 +389,7 @@ class DeltaProp(pl.LightningModule):
         buffer = io.BytesIO()
         torch.save(d, buffer)
         buffer.seek(0)
-
+        
         return super().load_from_checkpoint(
             buffer, map_location, hparams_file, strict, **kwargs
         )
@@ -381,21 +436,31 @@ def build_model(config, X_d_scaler: StandardScaler | None) -> DeltaProp:
         activation=torch.nn.PReLU(),
         dropout=encoder_dropout,
     )
+
+    left_encoder = Stack(message_passing=mp, agg=agg, encoder=encoder)
+
+    mp = BondMessagePassing(d_h=message_hidden_dim, depth=depth) # type: ignore
+    agg = MeanAggregation()
+    ffn_dims = mp.output_dim + num_mol_feats
+    encoder = Encoder(
+        input_dim=ffn_dims,
+        hidden_dim=ffn_hidden_dim,
+        output_dim=message_hidden_dim,
+        n_layers=ffn_num_layers,
+        activation=torch.nn.PReLU(),
+        dropout=encoder_dropout,
+    )
+    
+    right_encoder = Stack(message_passing=mp, agg=agg, encoder=encoder)
+
     interaction = Interaction(encoder.output_dim, dropout=interaction_dropout)
 
-    
     X_d_transform = (
         ScaleTransform.from_standard_scaler(X_d_scaler)
         if X_d_scaler is not None
         else None
     )
-    model = DeltaProp(
-        mp,
-        agg,
-        encoder,
-        interaction,
-        batch_norm=batch_norm,
-        X_d_transform=X_d_transform,
-    )
+
+    model = DeltaProp(left_encoder=left_encoder, right_encoder=right_encoder, interaction=interaction, X_d_transform=X_d_transform)
 
     return model
