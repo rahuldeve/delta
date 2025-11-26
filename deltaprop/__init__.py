@@ -152,9 +152,11 @@ def predict_func(
             .numpy()
         )
 
-    pred_probs = get_interpolate_prob(
-        pred_probs, train_mol_ds.Y.squeeze(), binary_threshold=1.5
-    )
+    pos_mask = train_mol_ds.Y.squeeze() > 1.5
+    neg_mask = ~pos_mask
+    pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
+    neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
+    pred_probs = (pos_contrib + neg_contrib) / 2
     preds = (pred_probs >= binary_classification_threshold).astype(float)
 
     return pred_probs, preds
@@ -181,9 +183,11 @@ def tune_binary_classification_threshold(
             .numpy()
         )
 
-    pred_probs = get_interpolate_prob(
-        pred_probs, train_mol_ds.Y.squeeze(), binary_threshold=1.5
-    )
+    pos_mask = train_mol_ds.Y.squeeze() > 1.5
+    neg_mask = ~pos_mask
+    pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
+    neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
+    pred_probs = (pos_contrib + neg_contrib) / 2
 
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
     optimal_threshold = optimize_threshold_from_predictions(
