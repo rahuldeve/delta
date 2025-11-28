@@ -5,17 +5,19 @@ from typing import Self
 
 import torch
 from chemprop.conf import DEFAULT_HIDDEN_DIM
-from chemprop.data import BatchMolGraph, TrainingBatch
-from chemprop.nn import Aggregation, BondMessagePassing, MessagePassing, MeanAggregation
+from chemprop.data import BatchMolGraph, MoleculeDataset, TrainingBatch
+from chemprop.data.dataloader import collate_batch
+from chemprop.nn import Aggregation, BondMessagePassing, MeanAggregation, MessagePassing
 from chemprop.nn.ffn import MLP
 from chemprop.nn.transforms import ScaleTransform
 from chemprop.schedulers import build_NoamLike_LRSched
 from lightning import pytorch as pl
 from lightning.pytorch.core.mixins.hparams_mixin import HyperparametersMixin
+from pytorch_lightning.utilities import move_data_to_device
 from sklearn.preprocessing import StandardScaler
 from torch import Tensor, nn, optim
 
-from deltaprop.data import RandomPairTrainBatch
+from deltaprop.data import RandomPairDataModule, RandomPairTrainBatch
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +279,12 @@ class DeltaProp(pl.LightningModule):
 
         self.log("val_loss", loss, batch_size=batch.B, prog_bar=True, on_epoch=True)
         return loss
+    
+    def on_train_epoch_start(self):
+        mine_hard_negative_candidates_train(self, self.trainer.datamodule) # type: ignore
+
+    def on_validation_epoch_start(self):
+        mine_hard_negative_candidates_train(self, self.trainer.datamodule) # type: ignore
 
     def configure_optimizers(self): # type: ignore
         opt = optim.Adam(self.parameters(), self.init_lr)
@@ -423,3 +431,77 @@ def build_model(config, X_d_scaler: StandardScaler | None) -> DeltaProp:
     )
 
     return model
+
+
+@torch.no_grad()
+def embed_all(mol_dataset: MoleculeDataset, model: DeltaProp, scale_X_d: bool = False):
+    model.eval()
+    if not scale_X_d:
+        model.X_d_transform.train()
+
+    dl = torch.utils.data.DataLoader(
+        mol_dataset,
+        batch_size=64,
+        shuffle=False,
+        collate_fn=collate_batch,
+    )
+    all_embeds = []
+    for batch in dl:
+        batch = move_data_to_device(batch, model.device)
+        res = model.embed_simple_batch(batch)
+        all_embeds.append(res["embeds"])
+
+    all_embeds = torch.cat(all_embeds)
+    return all_embeds
+
+
+@torch.no_grad()
+def mine_hard_negative_candidates_train(model: DeltaProp, datamodule: RandomPairDataModule):
+    train_mol_ds = datamodule.train_ds.anchor_dataset
+    left_train_embeds = embed_all(train_mol_ds, model)
+    right_train_embeds = embed_all(train_mol_ds, model)
+
+    interactions = (
+        model.interaction(left_train_embeds, right_train_embeds).sigmoid().squeeze().cpu()
+    )
+
+    reference = torch.from_numpy(train_mol_ds.Y > train_mol_ds.Y.T)
+    negatives = torch.logical_xor(interactions > 0.5, reference)
+
+    hard_neg_idxs = []
+    for i in range(negatives.shape[0]):
+        idxs = torch.argwhere(negatives[i]).squeeze().tolist()
+        if isinstance(idxs, int):
+            idxs = [idxs]
+        
+        hard_neg_idxs.append(idxs)
+
+    
+    datamodule.train_ds.hard_neg_idxs = hard_neg_idxs
+
+
+@torch.no_grad()
+def mine_hard_negative_candidates_val(model: DeltaProp, datamodule: RandomPairDataModule):
+    train_mol_ds = datamodule.train_ds.anchor_dataset
+    train_embeds = embed_all(train_mol_ds, model)
+
+    val_mol_ds = datamodule.val_ds.anchor_dataset
+    val_embeds = embed_all(val_mol_ds, model)
+
+    interactions = (
+        model.interaction(train_embeds, val_embeds).sigmoid().squeeze().cpu()
+    )
+
+    reference = torch.from_numpy(train_mol_ds.Y > val_mol_ds.Y.T)
+    negatives = torch.logical_xor(interactions > 0.5, reference)
+
+    hard_neg_idxs = []
+    for i in range(negatives.shape[0]):
+        idxs = torch.argwhere(negatives[i]).squeeze().tolist()
+        if isinstance(idxs, int):
+            idxs = [idxs]
+        
+        hard_neg_idxs.append(idxs)
+
+    
+    datamodule.val_ds.hard_neg_idxs = hard_neg_idxs
