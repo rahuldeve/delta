@@ -49,7 +49,7 @@ class RandomPairDataset(Dataset):
 
         selected_idxs = np.random.choice(
             hard_neg_candidate_idxs,
-            size=(min(self.n_candidates, len(hard_neg_candidate_idxs)), ),
+            size=(min(self.n_candidates // 4, len(hard_neg_candidate_idxs)), ),
             replace=False,
         )
 
@@ -61,7 +61,7 @@ class RandomPairDataset(Dataset):
             set(selected_hard_neg_idxs)
         )
 
-        n = 2*self.n_candidates - len(selected_hard_neg_idxs)
+        n = self.n_candidates - len(selected_hard_neg_idxs)
         selected_idxs = np.random.choice(list(remaining_idxs), size=(n,), replace=False)
         return selected_idxs.tolist()
 
