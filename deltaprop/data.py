@@ -125,6 +125,7 @@ class RandomPairDataModule(L.LightningDataModule):
             self.val_ds,
             batch_size=self.batch_size,
             shuffle=False,
+            worker_init_fn=seed_worker,
             collate_fn=RandomPairDataset.collate_function,
             num_workers=self.num_workers,
         )
