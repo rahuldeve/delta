@@ -6,7 +6,7 @@ from typing import Self
 import torch
 from chemprop.conf import DEFAULT_HIDDEN_DIM
 from chemprop.data import BatchMolGraph, TrainingBatch
-from chemprop.nn import Aggregation, BondMessagePassing, MessagePassing, MeanAggregation
+from chemprop.nn import Aggregation, BondMessagePassing, MeanAggregation, MessagePassing
 from chemprop.nn.ffn import MLP
 from chemprop.nn.transforms import ScaleTransform
 from chemprop.schedulers import build_NoamLike_LRSched
@@ -61,12 +61,38 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
         self.hparams["cls"] = self.__class__
 
         self.interaction_matrix = torch.nn.Linear(ndims, ndims, bias=False)
-        self.head_dropout = torch.nn.Dropout(dropout)
+        self.interaction_dropout = torch.nn.Dropout(dropout)
+
+        self.loss_fn = nn.BCEWithLogitsLoss()
 
     def forward(self, head_emb: Tensor, tail_emb: Tensor):
         R = self.interaction_matrix.weight.unsqueeze(0)
-        z = self.head_dropout(head_emb @ R) @ tail_emb.transpose(-2, -1)
-        return z.squeeze()
+        Z = self.interaction_dropout(head_emb @ R) @ tail_emb.transpose(-2, -1)
+        return Z.squeeze()
+
+    def bidirectional_interaction_loss(
+        self, Z_anchor, Z_candidates, target_anchor, target_candidates, B, C
+    ):
+        Z_anchor = Z_anchor.view(B, 1, -1)  # (B, d) -> (B, 1, d)
+        Z_candidates = Z_candidates.view(B, C, -1)  # (B*C, d) -> (B, C, d)
+
+        target_anchor = target_anchor.view(-1, 1)  # type: ignore
+        target_candidates = target_candidates.view(B, C)  # type: ignore
+
+        # left to right loss
+        lr_interaction = self(Z_anchor, Z_candidates).squeeze()
+        lr_labels = (target_anchor > target_candidates).squeeze()  # type: ignore
+        lr_loss = self.loss_fn(lr_interaction, lr_labels.float())
+
+        # right to left loss
+        rl_interaction = self(Z_candidates, Z_anchor).squeeze()
+        rl_labels = ~lr_labels  # type: ignore
+        rl_loss = self.loss_fn(rl_interaction, rl_labels.float())
+
+        delta = (lr_interaction.sigmoid() + rl_interaction.sigmoid() - 1.0) ** 2
+        symm_loss = delta.sum(dim=-1).mean()
+
+        return symm_loss, lr_loss, rl_loss
 
 
 class DeltaProp(pl.LightningModule):
@@ -136,7 +162,8 @@ class DeltaProp(pl.LightningModule):
         H = self.bn(H)
 
         Z = self.encoder(
-            H if X_d is None 
+            H
+            if X_d is None
             else self.ln(torch.cat((H, self.X_d_transform(X_d)), dim=1))
         )
 
@@ -148,24 +175,6 @@ class DeltaProp(pl.LightningModule):
         Z = self.encoding(bmg, V_d, X_d)
         return dict(embeds=Z, targets=target)
 
-    def bidirectional_interaction_loss(
-        self, Z_left, Z_right, target_left, target_right
-    ):
-        # left to right loss
-        lr_interaction = self.interaction(Z_left, Z_right).squeeze()
-        lr_labels = (target_left > target_right).squeeze()  # type: ignore
-        lr_loss = self.loss_fn(lr_interaction, lr_labels.float())
-
-        # right to left loss
-        rl_interaction = self.interaction(Z_right, Z_left).squeeze()
-        rl_labels = ~lr_labels  # type: ignore
-        rl_loss = self.loss_fn(rl_interaction, rl_labels.float())
-
-        delta = (lr_interaction.sigmoid() + rl_interaction.sigmoid() - 1.0) ** 2
-        symm_loss = delta.sum(dim=-1).mean()
-
-        return symm_loss, lr_loss, rl_loss
-
     def get_losses(self, batch: RandomPairTrainBatch):
         B, C = batch.B, batch.C
 
@@ -175,14 +184,8 @@ class DeltaProp(pl.LightningModule):
         bmg, V_d, X_d, target_candidates, _, _, _ = batch.candidates
         Z_candidates = self.encoding(bmg, V_d, X_d)
 
-        Z_anchor = Z_anchor.view(B, 1, -1)  # (B, d) -> (B, 1, d)
-        Z_candidates = Z_candidates.view(B, C, -1)  # (B*C, d) -> (B, C, d)
-
-        target_anchor = target_anchor.view(-1, 1) # type: ignore
-        target_candidates = target_candidates.view(B, C) # type: ignore
-
-        (sym_loss, lr_loss, rl_loss) = self.bidirectional_interaction_loss(
-            Z_anchor, Z_candidates, target_anchor, target_candidates
+        (sym_loss, lr_loss, rl_loss) = self.interaction.bidirectional_interaction_loss(
+            Z_anchor, Z_candidates, target_anchor, target_candidates, B, C
         )
 
         loss = (sym_loss + lr_loss + rl_loss) / 3
@@ -190,8 +193,8 @@ class DeltaProp(pl.LightningModule):
 
     def on_validation_model_eval(self) -> None:
         self.eval()
-        self.message_passing.V_d_transform.train() # type: ignore
-        self.message_passing.graph_transform.train() # type: ignore
+        self.message_passing.V_d_transform.train()  # type: ignore
+        self.message_passing.graph_transform.train()  # type: ignore
         self.X_d_transform.train()
 
     def training_step(self, batch: RandomPairTrainBatch, batch_idx):  # type: ignore
@@ -254,7 +257,7 @@ class DeltaProp(pl.LightningModule):
         self.log("val_loss", loss, batch_size=batch.B, prog_bar=True, on_epoch=True)
         return loss
 
-    def configure_optimizers(self): # type: ignore
+    def configure_optimizers(self):  # type: ignore
         opt = optim.Adam(self.parameters(), self.init_lr)
         if self.trainer.train_dataloader is None:
             # Loading `train_dataloader` to estimate number of training batches.
@@ -294,8 +297,8 @@ class DeltaProp(pl.LightningModule):
             logger.error(f"{traceback.format_exc()}")
 
         try:
-            hparams = d["hyper_parameters"] # type: ignore
-            state_dict = d["state_dict"] # type: ignore
+            hparams = d["hyper_parameters"]  # type: ignore
+            state_dict = d["state_dict"]  # type: ignore
         except KeyError:
             raise KeyError(
                 f"Could not find hyper parameters and/or state dict in {path}."
@@ -328,7 +331,7 @@ class DeltaProp(pl.LightningModule):
         )
         kwargs.update(submodules)
 
-        d = torch.load(checkpoint_path, map_location, weights_only=False) # type: ignore
+        d = torch.load(checkpoint_path, map_location, weights_only=False)  # type: ignore
         d["state_dict"] = state_dict
         d["hyper_parameters"] = hparams
         buffer = io.BytesIO()
@@ -370,7 +373,7 @@ def build_model(config, X_d_scaler: StandardScaler | None) -> DeltaProp:
         X_d_transform = None
         num_mol_feats = 0
 
-    mp = BondMessagePassing(d_h=message_hidden_dim, depth=depth) # type: ignore
+    mp = BondMessagePassing(d_h=message_hidden_dim, depth=depth)  # type: ignore
     agg = MeanAggregation()
     ffn_dims = mp.output_dim + num_mol_feats
     encoder = Encoder(
@@ -383,7 +386,6 @@ def build_model(config, X_d_scaler: StandardScaler | None) -> DeltaProp:
     )
     interaction = Interaction(encoder.output_dim, dropout=interaction_dropout)
 
-    
     X_d_transform = (
         ScaleTransform.from_standard_scaler(X_d_scaler)
         if X_d_scaler is not None
