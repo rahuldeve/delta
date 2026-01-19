@@ -5,7 +5,7 @@ import pandas as pd
 import rdkit.Chem as Chem
 import torch
 from rdkit.Chem.Descriptors import CalcMolDescriptors
-from rdkit.Chem.MolStandardize import rdMolStandardize
+from rdkit.Chem.MolStandardize import rdMolStandardize # type: ignore
 from rdkit.Chem.Scaffolds.MurckoScaffold import MurckoScaffoldSmiles
 from rdkit.rdBase import BlockLogs
 
@@ -21,7 +21,7 @@ def set_seeds(seed):
 
 def standardize(smiles):
     with BlockLogs():
-        params = Chem.SmilesParserParams()
+        params = Chem.SmilesParserParams() # type: ignore
         params.removeHs = False
         mol = Chem.MolFromSmiles(smiles, params)  # type: ignore
         if mol is None:
@@ -55,8 +55,8 @@ def mol_to_inchi(mol):
 
 
 def get_scaffold(mol) -> str:
-    smi = Chem.MolToSmiles(mol)
-    scaffold = MurckoScaffoldSmiles(smi)
+    smi = Chem.MolToSmiles(mol) # type: ignore
+    scaffold: str = MurckoScaffoldSmiles(smi) # type: ignore
     if len(scaffold) == 0:
         scaffold = smi
     return scaffold
