@@ -200,7 +200,7 @@ def tune_binary_classification_threshold(
     model: DeltaProp,
     train_mol_ds: MoleculeDataset,
     val_mol_ds: MoleculeDataset,
-    labels,
+    val_labels,
     random_seed: int,
 ):
     model.eval()
@@ -225,7 +225,7 @@ def tune_binary_classification_threshold(
 
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
     optimal_threshold = optimize_threshold_from_predictions(
-        labels=labels,
+        labels=val_labels,
         probs=pred_probs,
         thresholds=thresholds,
         random_seed=random_seed,
