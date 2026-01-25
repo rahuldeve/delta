@@ -18,6 +18,18 @@ from deltaprop.model import DeltaProp, build_model
 from evaluate.data import set_seeds
 
 
+DEFAULT_CONFIG = {
+    "depth": 1,
+    "ffn_hidden_dim": 300,
+    "ffn_num_layers": 1,
+    "message_hidden_dim": 300,
+    "batch_norm": False,
+    "encoder_dropout": 0.0,
+    "interaction_dropout": 0.0,
+    "candidate_size": 32,
+}
+
+
 def train_func(
     config,
     train_mol_ds: MoleculeDataset,

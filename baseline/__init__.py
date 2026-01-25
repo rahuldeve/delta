@@ -24,6 +24,16 @@ from sklearn.preprocessing import StandardScaler
 from evaluate.data import set_seeds
 
 
+DEFAULT_CONFIG = {
+    "depth": 1,
+    "ffn_hidden_dim": 300,
+    "ffn_num_layers": 1,
+    "message_hidden_dim": 300,
+    "batch_norm": False,
+    "encoder_dropout": 0.0,
+}
+
+
 def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
