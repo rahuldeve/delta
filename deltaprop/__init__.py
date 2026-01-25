@@ -13,7 +13,7 @@ from sklearn.preprocessing import StandardScaler
 
 from deltaprop.data import setup_train_val_dataloaders
 from deltaprop.model import DeltaProp, build_model
-from utils import RANDOM_SEED, set_seeds
+from evaluate.data import RANDOM_SEED, set_seeds
 from sklearn.isotonic import IsotonicRegression
 from scipy.interpolate import interp1d
 

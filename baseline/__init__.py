@@ -21,7 +21,7 @@ from ray import tune
 from ray.tune.integration.pytorch_lightning import TuneReportCheckpointCallback
 from sklearn.preprocessing import StandardScaler
 
-from utils import RANDOM_SEED, set_seeds
+from evaluate.data import RANDOM_SEED, set_seeds
 
 
 def seed_worker(worker_id):

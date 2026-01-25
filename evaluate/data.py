@@ -1,3 +1,4 @@
+from enum import StrEnum, auto
 import random
 
 import numpy as np
@@ -95,3 +96,26 @@ def preprocess_ray(df):
     df = df.drop(["smiles", "inchi", "scaffold"], axis=1)
     return df
 
+
+
+def load_tba():
+    df = pd.read_excel("../datasets/GSK_TBA_AH_JSFedit070425.xlsx")
+    df = df.loc[
+        :, ["smiles", "parent_remaining_24", "metabolite_detected"]
+    ]
+    df = preprocess_ray(df)
+    df["reg_target"] = df["parent_remaining_24"].round(1) / 100 + df["metabolite_detected"]
+    df["label"] = df["reg_target"] > 1.5
+    return df
+
+
+def load_gsk_hepg2():
+    df = pd.read_csv("../datasets/GSK_HepG2.csv")
+    df = df.loc[:, ["SMILES", "% inhibition of HepG2 cell line: PCT_INHIB_HEPG2 (%)"]]
+    df.columns = ["smiles", "per_inhibition"]
+
+    df = preprocess_ray(df)
+    df["reg_target"] = df["per_inhibition"] / 100
+    df["label"] = df["reg_target"] > 0.5
+    return df
+      
