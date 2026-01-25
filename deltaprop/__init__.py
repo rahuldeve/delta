@@ -55,7 +55,10 @@ def train_func(
     )
 
     trainer.fit(model, train_dataloaders=train_dl, val_dataloaders=val_dl)
-    model = DeltaProp.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)  # type: ignore
+    model = DeltaProp.load_from_checkpoint(
+        trainer.checkpoint_callback.best_model_path,  # type: ignore
+        weights_only=False,
+    )
     return model
 
 

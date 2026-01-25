@@ -107,7 +107,10 @@ def train_func(
     )
 
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
-    model = MPNN.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)  # type: ignore
+    model = MPNN.load_from_checkpoint(
+        trainer.checkpoint_callback.best_model_path,  # type: ignore
+        weights_only=False,
+    )
     return model
 
 
