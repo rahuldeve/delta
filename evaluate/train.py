@@ -15,7 +15,7 @@ from sklearn.model_selection import GroupKFold, GroupShuffleSplit, KFold, Shuffl
 from evaluate.data import RANDOM_SEED
 
 
-def get_molecule_datapoint(row):
+def get_molecule_datapoint(row, target_column_name):
     feat_entry_names = [f for f in row.index if f.startswith("feat")]
     if len(feat_entry_names) > 0:
         feat_array = pd.to_numeric(row[feat_entry_names], errors="coerce")
@@ -24,7 +24,7 @@ def get_molecule_datapoint(row):
 
     return cp.data.MoleculeDatapoint(
         mol=row["mol"], 
-        y=np.array([row["reg_target"]]), 
+        y=np.array([row[target_column_name]]), 
         x_d=feat_array
     )
 

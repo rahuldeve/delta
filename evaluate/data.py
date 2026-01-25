@@ -104,8 +104,8 @@ def load_tba():
         :, ["smiles", "parent_remaining_24", "metabolite_detected"]
     ]
     df = preprocess_ray(df)
-    df["reg_target"] = df["parent_remaining_24"].round(1) / 100 + df["metabolite_detected"]
-    df["label"] = df["reg_target"] > 1.5
+    df["cont_target"] = df["parent_remaining_24"].round(1) / 100 + df["metabolite_detected"]
+    df["bin_target"] = df["cont_target"] > 1.5
     return df
 
 
@@ -115,7 +115,7 @@ def load_gsk_hepg2():
     df.columns = ["smiles", "per_inhibition"]
 
     df = preprocess_ray(df)
-    df["reg_target"] = df["per_inhibition"] / 100
-    df["label"] = df["reg_target"] > 0.5
+    df["cont_target"] = df["per_inhibition"] / 100
+    df["bin_target"] = df["cont_target"] > 0.5
     return df
       
