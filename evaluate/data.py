@@ -1,5 +1,4 @@
 import random
-from enum import StrEnum, auto
 
 import numpy as np
 import pandas as pd
@@ -95,12 +94,22 @@ def preprocess_ray(df):
     return df
 
 
-
-def load_tba():
+def load_single_target_tba():
     df = pd.read_excel("../datasets/GSK_TBA_AH_JSFedit070425.xlsx")
     df = df.loc[:, ["smiles", "parent_remaining_24", "metabolite_detected"]]
     df = preprocess_ray(df)
-    df["cont_target"] = df["parent_remaining_24"].round(1) / 100 + df["metabolite_detected"]
+    df["cont_target"] = df["parent_remaining_24"].round(1) / 100
+    df["bin_target"] = df["cont_target"] > 0.5
+    return df, 0.5
+
+
+def load_dual_target_tba():
+    df = pd.read_excel("../datasets/GSK_TBA_AH_JSFedit070425.xlsx")
+    df = df.loc[:, ["smiles", "parent_remaining_24", "metabolite_detected"]]
+    df = preprocess_ray(df)
+    df["cont_target"] = (
+        df["parent_remaining_24"].round(1) / 100 + df["metabolite_detected"]
+    )
     df["bin_target"] = df["cont_target"] > 1.5
     return df, 1.5
 
@@ -114,4 +123,3 @@ def load_gsk_hepg2():
     df["cont_target"] = df["per_inhibition"] / 100
     df["bin_target"] = df["cont_target"] > 0.5
     return df, 0.5
-      
