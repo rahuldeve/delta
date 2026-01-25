@@ -106,7 +106,7 @@ def load_tba():
     df = preprocess_ray(df)
     df["cont_target"] = df["parent_remaining_24"].round(1) / 100 + df["metabolite_detected"]
     df["bin_target"] = df["cont_target"] > 1.5
-    return df
+    return df, 1.5
 
 
 def load_gsk_hepg2():
@@ -117,5 +117,5 @@ def load_gsk_hepg2():
     df = preprocess_ray(df)
     df["cont_target"] = df["per_inhibition"] / 100
     df["bin_target"] = df["cont_target"] > 0.5
-    return df
+    return df, 1.5
       
