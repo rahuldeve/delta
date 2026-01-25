@@ -14,31 +14,17 @@ from sklearn.metrics import (
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit, KFold, ShuffleSplit
 
 
-def get_molecule_datapoint(row, target_column_name):
-    feat_entry_names = [f for f in row.index if f.startswith("feat")]
-    if len(feat_entry_names) > 0:
-        feat_array = pd.to_numeric(row[feat_entry_names], errors="coerce")
-    else:
-        feat_array = None
-
-    return cp.data.MoleculeDatapoint(
-        mol=row["mol"], 
-        y=np.array([row[target_column_name]]), 
-        x_d=feat_array
-    )
-
-
-def group_splitters(random_state, n_outer):
+def get_group_splitters(random_state, n_outer):
     outer_splitter = GroupKFold(
-        n_splits=n_outer, 
+        n_splits=n_outer,
         shuffle=True,  # type: ignore
-        random_state=random_state # type: ignore
+        random_state=random_state,  # type: ignore
     )
     inner_spliter = GroupShuffleSplit(1, test_size=0.5, random_state=random_state)
     return outer_splitter, inner_spliter
 
 
-def random_splitters(random_state, n_outer):
+def get_random_splitters(random_state, n_outer):
     outer_splitter = KFold(n_splits=n_outer, shuffle=True, random_state=random_state)
     inner_spliter = ShuffleSplit(1, test_size=0.5, random_state=random_state)
     return outer_splitter, inner_spliter
@@ -67,7 +53,29 @@ def generate_repeated_5xn_splits(df, n, get_splitters, random_state):
             yield (outer_idx, inner_idx), (train_df, val_df, test_df)
 
 
-def prepare_mol_datasets(train_df, val_df, test_df):
+def get_molecule_datapoint(row, target_column_name):
+    feat_entry_names = [f for f in row.index if f.startswith("feat")]
+    if len(feat_entry_names) > 0:
+        feat_array = pd.to_numeric(row[feat_entry_names], errors="coerce")
+    else:
+        feat_array = None
+
+    return cp.data.MoleculeDatapoint(
+        mol=row["mol"], y=np.array([row[target_column_name]]), x_d=feat_array
+    )
+
+
+def prepare_mol_datasets(train_df, val_df, test_df, target_column_name):
+    train_df["mol_dp"] = train_df.apply(
+        get_molecule_datapoint, target_column_name=target_column_name, axis=1
+    )
+    val_df["mol_dp"] = val_df.apply(
+        get_molecule_datapoint, target_column_name=target_column_name, axis=1
+    )
+    test_df["mol_dp"] = test_df.apply(
+        get_molecule_datapoint, target_column_name=target_column_name, axis=1
+    )
+
     featurizer = cp.featurizers.SimpleMoleculeMolGraphFeaturizer()
     train_mol_dataset = cp.data.MoleculeDataset(
         train_df["mol_dp"], featurizer=featurizer
