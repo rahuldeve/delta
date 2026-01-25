@@ -98,9 +98,7 @@ def preprocess_ray(df):
 
 def load_tba():
     df = pd.read_excel("../datasets/GSK_TBA_AH_JSFedit070425.xlsx")
-    df = df.loc[
-        :, ["smiles", "parent_remaining_24", "metabolite_detected"]
-    ]
+    df = df.loc[:, ["smiles", "parent_remaining_24", "metabolite_detected"]]
     df = preprocess_ray(df)
     df["cont_target"] = df["parent_remaining_24"].round(1) / 100 + df["metabolite_detected"]
     df["bin_target"] = df["cont_target"] > 1.5
@@ -115,5 +113,5 @@ def load_gsk_hepg2():
     df = preprocess_ray(df)
     df["cont_target"] = df["per_inhibition"] / 100
     df["bin_target"] = df["cont_target"] > 0.5
-    return df, 1.5
+    return df, 0.5
       
