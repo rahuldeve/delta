@@ -21,7 +21,7 @@ from ray import tune
 from ray.tune.integration.pytorch_lightning import TuneReportCheckpointCallback
 from sklearn.preprocessing import StandardScaler
 
-from evaluate.data import RANDOM_SEED, set_seeds
+from evaluate.data import set_seeds
 
 
 def seed_worker(worker_id):
@@ -66,17 +66,18 @@ def train_func(
     train_mol_ds: MoleculeDataset,
     val_mol_ds: MoleculeDataset,
     batch_size: int,
+    random_seed: int,
     X_d_scaler: StandardScaler | None,
     max_epochs: int = 20,
     early_stopping_patience: int = 10,
 ):
-    set_seeds(RANDOM_SEED)
+    set_seeds(random_seed)
 
     train_loader = build_dataloader(
         train_mol_ds,
         batch_size=batch_size,
         num_workers=8,
-        seed=RANDOM_SEED,
+        seed=random_seed,
         worker_init_fn=seed_worker,
     )
 
@@ -124,17 +125,18 @@ def tune_func(
     train_mol_ds: MoleculeDataset,
     val_mol_ds: MoleculeDataset,
     batch_size: int,
+    random_state: int,
     X_d_scaler: StandardScaler | None,
     max_epochs: int = 20,
     early_stopping_patience: int = 10,
 ):
-    set_seeds(RANDOM_SEED)
+    set_seeds(random_state)
 
     train_loader = build_dataloader(
         train_mol_ds,
         batch_size=batch_size,
         num_workers=8,
-        seed=RANDOM_SEED,
+        seed=random_state,
         worker_init_fn=seed_worker,
     )
 
@@ -199,7 +201,7 @@ def predict_func(
 
 
 def tune_binary_classification_threshold(
-    model: MPNN, val_mol_ds: MoleculeDataset, val_labels
+    model: MPNN, val_mol_ds: MoleculeDataset, val_labels, random_seed: int
 ):
     pred_probs = get_pred_probs(model, val_mol_ds, scale_X_d=False)
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
@@ -208,7 +210,7 @@ def tune_binary_classification_threshold(
         labels=val_labels,
         probs=pred_probs,
         thresholds=thresholds,
-        random_seed=RANDOM_SEED,
+        random_seed=random_seed,
     )
 
     return optimal_threshold

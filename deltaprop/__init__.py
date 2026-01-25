@@ -13,7 +13,7 @@ from sklearn.preprocessing import StandardScaler
 
 from deltaprop.data import setup_train_val_dataloaders
 from deltaprop.model import DeltaProp, build_model
-from evaluate.data import RANDOM_SEED, set_seeds
+from evaluate.data import set_seeds
 from sklearn.isotonic import IsotonicRegression
 from scipy.interpolate import interp1d
 
@@ -23,11 +23,12 @@ def train_func(
     val_mol_ds: MoleculeDataset,
     binary_threshold: float,
     batch_size: int,
+    random_seed: int,
     X_d_scaler: StandardScaler | None,
     max_epochs: int = 20,
     early_stopping_patience: int = 10,
 ):
-    set_seeds(RANDOM_SEED)
+    set_seeds(random_seed)
     train_dl, val_dl = setup_train_val_dataloaders(
         train_mol_ds, val_mol_ds, binary_threshold, batch_size, config["candidate_size"]
     )
@@ -76,11 +77,12 @@ def tune_func(
     val_mol_ds: MoleculeDataset,
     binary_threshold: float,
     batch_size: int,
+    random_seed: int,
     X_d_scaler: StandardScaler | None,
     max_epochs: int = 20,
     early_stopping_patience: int = 10,
 ):
-    set_seeds(RANDOM_SEED)
+    set_seeds(random_seed)
     train_dl, val_dl = setup_train_val_dataloaders(
         train_mol_ds, val_mol_ds, binary_threshold, batch_size, config["candidate_size"]
     )
@@ -153,7 +155,6 @@ def predict_func(
     model: DeltaProp,
     binary_classification_threshold: float,
     train_mol_ds: MoleculeDataset,
-    exemplar_idxs: list[int],
     test_mol_ds: MoleculeDataset,
 ):
     model.eval()
@@ -183,9 +184,9 @@ def predict_func(
 def tune_binary_classification_threshold(
     model: DeltaProp,
     train_mol_ds: MoleculeDataset,
-    exemplar_idxs: list[int],
     val_mol_ds: MoleculeDataset,
     labels,
+    random_seed: int
 ):
     model.eval()
 
@@ -212,7 +213,7 @@ def tune_binary_classification_threshold(
         labels=labels,
         probs=pred_probs,
         thresholds=thresholds,
-        random_seed=RANDOM_SEED,
+        random_seed=random_seed,
     )
 
     return optimal_threshold

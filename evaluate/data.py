@@ -11,8 +11,6 @@ from rdkit.Chem.MolStandardize import rdMolStandardize  # type: ignore
 from rdkit.Chem.Scaffolds.MurckoScaffold import MurckoScaffoldSmiles
 from rdkit.rdBase import BlockLogs
 
-RANDOM_SEED = 42
-
 
 def set_seeds(seed):
     random.seed(seed)

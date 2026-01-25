@@ -12,7 +12,6 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit, KFold, ShuffleSplit
-from evaluate.data import RANDOM_SEED
 
 
 def get_molecule_datapoint(row, target_column_name):
@@ -45,8 +44,8 @@ def random_splitters(random_state, n_outer):
     return outer_splitter, inner_spliter
 
 
-def generate_repeated_5xn_splits(df, n, get_splitters):
-    rng = np.random.RandomState(RANDOM_SEED)
+def generate_repeated_5xn_splits(df, n, get_splitters, random_state):
+    rng = np.random.RandomState(random_state)
     for outer_idx in range(5):
         randint = rng.randint(low=0, high=32767)
 
