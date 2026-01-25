@@ -70,6 +70,7 @@ def train_func(
     X_d_scaler: StandardScaler | None,
     max_epochs: int = 20,
     early_stopping_patience: int = 10,
+    **kwargs,
 ):
     set_seeds(random_seed)
 
@@ -197,6 +198,7 @@ def predict_func(
     model: MPNN,
     binary_classification_threshold: float,
     test_mol_ds: MoleculeDataset,
+    **kwargs,
 ):
     pred_probs = get_pred_probs(model, test_mol_ds, scale_X_d=True)
     preds = (pred_probs >= binary_classification_threshold).astype(float)
@@ -204,7 +206,7 @@ def predict_func(
 
 
 def tune_binary_classification_threshold(
-    model: MPNN, val_mol_ds: MoleculeDataset, val_labels, random_seed: int
+    model: MPNN, val_mol_ds: MoleculeDataset, val_labels, random_seed: int, **kwargs
 ):
     pred_probs = get_pred_probs(model, val_mol_ds, scale_X_d=False)
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
