@@ -1,12 +1,12 @@
-from enum import StrEnum, auto
 import random
+from enum import StrEnum, auto
 
 import numpy as np
 import pandas as pd
 import ray
 import rdkit.Chem as Chem
-from rdkit.Chem import Descriptors
 import torch
+from rdkit.Chem import Descriptors
 from rdkit.Chem.MolStandardize import rdMolStandardize  # type: ignore
 from rdkit.Chem.Scaffolds.MurckoScaffold import MurckoScaffoldSmiles
 from rdkit.rdBase import BlockLogs

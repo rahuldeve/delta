@@ -9,13 +9,14 @@ from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.utilities import move_data_to_device
 from ray import tune
 from ray.tune.integration.pytorch_lightning import TuneReportCheckpointCallback
+from scipy.interpolate import interp1d
+from sklearn.isotonic import IsotonicRegression
 from sklearn.preprocessing import StandardScaler
 
 from deltaprop.data import setup_train_val_dataloaders
 from deltaprop.model import DeltaProp, build_model
 from evaluate.data import set_seeds
-from sklearn.isotonic import IsotonicRegression
-from scipy.interpolate import interp1d
+
 
 def train_func(
     config,
@@ -135,7 +136,6 @@ def embed_all(mol_dataset: MoleculeDataset, model: DeltaProp, scale_X_d: bool = 
     return all_embeds
 
 
-
 def get_prob(vals, tail_probs, binary_threshold):
     sort_idxs = np.argsort(vals)
     X = vals[sort_idxs]
@@ -189,7 +189,7 @@ def tune_binary_classification_threshold(
     train_mol_ds: MoleculeDataset,
     val_mol_ds: MoleculeDataset,
     labels,
-    random_seed: int
+    random_seed: int,
 ):
     model.eval()
 

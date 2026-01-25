@@ -22,7 +22,9 @@ class RandomPairTrainBatch(NamedTuple):
 
 
 class RandomPairDataset(Dataset):
-    def __init__(self, anchor_dataset, candidate_dataset, binary_threshold, n_candidates):
+    def __init__(
+        self, anchor_dataset, candidate_dataset, binary_threshold, n_candidates
+    ):
         super().__init__()
         self.anchor_dataset: data.datasets.MoleculeDataset = anchor_dataset
         self.candidate_dataset: data.datasets.MoleculeDataset = candidate_dataset
@@ -39,8 +41,8 @@ class RandomPairDataset(Dataset):
 
         selected_idxs = np.random.choice(
             exemplar_idxs,
-            size=(min(self.n_candidates, exemplar_idxs.shape[0]), ),
-            replace=False
+            size=(min(self.n_candidates, exemplar_idxs.shape[0]),),
+            replace=False,
         )
 
         return [self.candidate_dataset[idx] for idx in selected_idxs]
@@ -50,14 +52,14 @@ class RandomPairDataset(Dataset):
         exemplar_mask = targets > self.binary_threshold
         non_exemplar_idxs = np.argwhere(~exemplar_mask).squeeze()
 
-        candidate_idxs = np.random.choice(
-            non_exemplar_idxs, size=(n,), replace=False
-        )
+        candidate_idxs = np.random.choice(non_exemplar_idxs, size=(n,), replace=False)
         return [self.candidate_dataset[idx] for idx in candidate_idxs]
 
     def __getitem__(self, idx) -> RandomPairDataPoint:
         exemplar_idxs = self.get_exemplar_candidates()
-        random_idxs = self.get_random_candidates(2*self.n_candidates - len(exemplar_idxs))
+        random_idxs = self.get_random_candidates(
+            2 * self.n_candidates - len(exemplar_idxs)
+        )
         return RandomPairDataPoint(
             self.anchor_dataset[idx],
             exemplar_idxs + random_idxs,
@@ -89,8 +91,12 @@ def setup_train_val_dataloaders(
     candidate_size: int,
     num_workers: int = 8,
 ):
-    train_pair_ds = RandomPairDataset(train_mol_ds, train_mol_ds, binary_threshold, candidate_size)
-    val_pair_ds = RandomPairDataset(train_mol_ds, val_mol_ds, binary_threshold, candidate_size)
+    train_pair_ds = RandomPairDataset(
+        train_mol_ds, train_mol_ds, binary_threshold, candidate_size
+    )
+    val_pair_ds = RandomPairDataset(
+        train_mol_ds, val_mol_ds, binary_threshold, candidate_size
+    )
 
     train_pair_dl = DataLoader(
         train_pair_ds,
@@ -99,7 +105,7 @@ def setup_train_val_dataloaders(
         collate_fn=RandomPairDataset.collate_function,
         worker_init_fn=seed_worker,
         num_workers=num_workers,
-        drop_last=True
+        drop_last=True,
     )
 
     val_pair_dl = DataLoader(
