@@ -2,8 +2,9 @@ import random
 
 import lightning as L
 import numpy as np
+import pandas as pd
 import torch
-from chemprop.data import MoleculeDataset, build_dataloader
+from chemprop.data import MoleculeDatapoint, MoleculeDataset, build_dataloader
 from chemprop.data.dataloader import collate_batch
 from chemprop.models import MPNN
 from chemprop.nn import (
@@ -23,7 +24,6 @@ from sklearn.preprocessing import StandardScaler
 
 from evaluate.data import set_seeds
 
-
 DEFAULT_CONFIG = {
     "depth": 1,
     "ffn_hidden_dim": 300,
@@ -32,6 +32,18 @@ DEFAULT_CONFIG = {
     "batch_norm": False,
     "encoder_dropout": 0.0,
 }
+
+
+def get_molecule_datapoint(row):
+    feat_entry_names = [f for f in row.index if f.startswith("feat")]
+    if len(feat_entry_names) > 0:
+        feat_array = pd.to_numeric(row[feat_entry_names], errors="coerce")
+    else:
+        feat_array = None
+
+    return MoleculeDatapoint(
+        mol=row["mol"], y=np.array([row["bin_target"]]), x_d=feat_array
+    )
 
 
 def seed_worker(worker_id):

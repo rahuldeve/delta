@@ -1,7 +1,8 @@
 import lightning as L
 import numpy as np
+import pandas as pd
 import torch
-from chemprop.data import MoleculeDataset
+from chemprop.data import MoleculeDatapoint, MoleculeDataset
 from chemprop.data.dataloader import collate_batch
 from ghostml import optimize_threshold_from_predictions
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
@@ -17,7 +18,6 @@ from deltaprop.data import setup_train_val_dataloaders
 from deltaprop.model import DeltaProp, build_model
 from evaluate.data import set_seeds
 
-
 DEFAULT_CONFIG = {
     "depth": 1,
     "ffn_hidden_dim": 300,
@@ -28,6 +28,18 @@ DEFAULT_CONFIG = {
     "interaction_dropout": 0.0,
     "candidate_size": 32,
 }
+
+
+def get_molecule_datapoint(row):
+    feat_entry_names = [f for f in row.index if f.startswith("feat")]
+    if len(feat_entry_names) > 0:
+        feat_array = pd.to_numeric(row[feat_entry_names], errors="coerce")
+    else:
+        feat_array = None
+
+    return MoleculeDatapoint(
+        mol=row["mol"], y=np.array([row["cont_target"]]), x_d=feat_array
+    )
 
 
 def train_func(
