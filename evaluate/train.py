@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from enum import StrEnum, auto
 
 import chemprop as cp
@@ -96,3 +97,88 @@ def calc_metrics(pred_probs, preds, labels):
         "roc_auc": roc_auc_score(labels, pred_probs),
         "average_precision": average_precision_score(labels, pred_probs),
     }
+
+
+@dataclass
+class TrainConfig:
+    batch_size: int
+    max_epochs: int
+    early_stopping_patience: int
+
+
+@dataclass
+class CVConfig:
+    n_splits: int
+    split_type: SplitType
+
+
+def train_and_evaluate_split(
+    train_df,
+    val_df,
+    test_df,
+    df_classification_threshold,
+    model_module,
+    random_seed,
+    train_config: TrainConfig,
+):
+    train_mol_ds, val_mol_ds, test_mol_ds, X_d_scaler = prepare_mol_datasets(
+        train_df, val_df, test_df, model_module.get_molecule_datapoint
+    )
+
+    model = model_module.train_func(
+        config=model_module.DEFAULT_CONFIG,
+        train_mol_ds=train_mol_ds,
+        val_mol_ds=val_mol_ds,
+        X_d_scaler=X_d_scaler,
+        binary_threshold=df_classification_threshold,
+        batch_size=train_config.batch_size,
+        max_epochs=train_config.max_epochs,
+        early_stopping_patience=train_config.early_stopping_patience,
+        random_seed=random_seed,
+    )
+
+    clf_th = model_module.tune_binary_classification_threshold(
+        model=model,
+        train_mol_ds=train_mol_ds,
+        val_mol_ds=val_mol_ds,
+        val_labels=val_df["bin_target"],
+        random_seed=random_seed,
+    )
+
+    pred_probs, preds = model_module.predict_func(
+        model=model,
+        binary_classification_threshold=clf_th,
+        train_mol_ds=train_mol_ds,
+        test_mol_ds=test_mol_ds,
+    )
+
+    return calc_metrics(pred_probs, preds, test_df["bin_target"])
+
+
+def train_and_evaluate(
+    df,
+    df_classification_threshold: float,
+    model_module,
+    random_seed: int,
+    train_config: TrainConfig,
+    cv_config: CVConfig,
+):
+    splits = generate_repeated_5xn_splits(
+        df, cv_config.n_splits, cv_config.split_type, random_state=random_seed
+    )
+    for split_idxs, split in splits:
+        outer_idx, inner_idx = split_idxs
+        train_df, val_df, test_df = split
+
+        metrics_dict = train_and_evaluate_split(
+            train_df=train_df,
+            val_df=val_df,
+            test_df=test_df,
+            df_classification_threshold=df_classification_threshold,
+            model_module=model_module,
+            random_seed=random_seed,
+            train_config=train_config,
+        )
+
+        result_dict = {"outer": outer_idx, "inner": inner_idx} | metrics_dict
+        yield result_dict
