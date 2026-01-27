@@ -22,16 +22,8 @@ from ray import tune
 from ray.tune.integration.pytorch_lightning import TuneReportCheckpointCallback
 from sklearn.preprocessing import StandardScaler
 
+from baseline.config import BaselineConfig
 from evaluate.data import set_seeds
-
-DEFAULT_CONFIG = {
-    "depth": 1,
-    "ffn_hidden_dim": 300,
-    "ffn_num_layers": 1,
-    "message_hidden_dim": 300,
-    "batch_norm": False,
-    "encoder_dropout": 0.0,
-}
 
 
 def get_molecule_datapoint(row):
@@ -52,12 +44,12 @@ def seed_worker(worker_id):
     random.seed(worker_seed)
 
 
-def build_model(config, X_d_scaler: StandardScaler | None):
-    depth = config["depth"]
-    ffn_hidden_dim = config["ffn_hidden_dim"]
-    ffn_num_layers = config["ffn_num_layers"]
-    message_hidden_dim = config["message_hidden_dim"]
-    batch_norm = config["batch_norm"]
+def build_model(config: BaselineConfig, X_d_scaler: StandardScaler | None):
+    depth = config.depth
+    ffn_hidden_dim = config.ffn_hidden_dim
+    ffn_num_layers = config.ffn_num_layers
+    message_hidden_dim = config.message_hidden_dim
+    batch_norm = config.batch_norm
 
     if X_d_scaler is not None:
         X_d_transform = ScaleTransform.from_standard_scaler(X_d_scaler)
