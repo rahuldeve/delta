@@ -1,6 +1,7 @@
+from enum import StrEnum, auto
+
 import chemprop as cp
 import numpy as np
-import pandas as pd
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
@@ -30,12 +31,22 @@ def get_random_splitters(random_state, n_outer):
     return outer_splitter, inner_spliter
 
 
-def generate_repeated_5xn_splits(df, n, get_splitters, random_state):
+class SplitType(StrEnum):
+    RANDOM = auto()
+    SCAFFOLD = auto()
+
+
+def generate_repeated_5xn_splits(df, n: int, split_type: SplitType, random_state: int):
     rng = np.random.RandomState(random_state)
     for outer_idx in range(5):
         randint = rng.randint(low=0, high=32767)
 
-        outer_splitter, inner_spliter = get_splitters(randint, n_outer=n)
+        if split_type == SplitType.RANDOM:
+            outer_splitter, inner_spliter = get_random_splitters(randint, n_outer=n)
+        elif split_type == SplitType.SCAFFOLD:
+            outer_splitter, inner_spliter = get_group_splitters(randint, n_outer=n)
+        else:
+            raise ValueError(split_type)
 
         for inner_idx, (train_idxs, val_test_idxs) in enumerate(
             outer_splitter.split(df, groups=df["cluster"])
