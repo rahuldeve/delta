@@ -14,20 +14,10 @@ from scipy.interpolate import interp1d
 from sklearn.isotonic import IsotonicRegression
 from sklearn.preprocessing import StandardScaler
 
+from deltaprop.config import DeltapropConfig
 from deltaprop.data import setup_train_val_dataloaders
 from deltaprop.model import DeltaProp, build_model
 from evaluate.data import set_seeds
-
-DEFAULT_CONFIG = {
-    "depth": 1,
-    "ffn_hidden_dim": 300,
-    "ffn_num_layers": 1,
-    "message_hidden_dim": 300,
-    "batch_norm": False,
-    "encoder_dropout": 0.0,
-    "interaction_dropout": 0.0,
-    "candidate_size": 32,
-}
 
 
 def get_molecule_datapoint(row):
@@ -43,7 +33,7 @@ def get_molecule_datapoint(row):
 
 
 def train_func(
-    config,
+    config: DeltapropConfig,
     train_mol_ds: MoleculeDataset,
     val_mol_ds: MoleculeDataset,
     binary_threshold: float,
@@ -55,7 +45,7 @@ def train_func(
 ):
     set_seeds(random_seed)
     train_dl, val_dl = setup_train_val_dataloaders(
-        train_mol_ds, val_mol_ds, binary_threshold, batch_size, config["candidate_size"]
+        train_mol_ds, val_mol_ds, binary_threshold, batch_size, config.candidate_size
     )
 
     model = build_model(config, X_d_scaler)

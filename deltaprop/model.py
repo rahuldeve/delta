@@ -15,6 +15,7 @@ from lightning.pytorch.core.mixins.hparams_mixin import HyperparametersMixin
 from sklearn.preprocessing import StandardScaler
 from torch import Tensor, nn, optim
 
+from deltaprop.config import DeltapropConfig
 from deltaprop.data import RandomPairTrainBatch
 
 logger = logging.getLogger(__name__)
@@ -357,14 +358,16 @@ class DeltaProp(pl.LightningModule):
         return model
 
 
-def build_model(config, X_d_scaler: StandardScaler | None) -> DeltaProp:
-    depth = config["depth"]
-    ffn_hidden_dim = config["ffn_hidden_dim"]
-    ffn_num_layers = config["ffn_num_layers"]
-    message_hidden_dim = config["message_hidden_dim"]
-    batch_norm = config["batch_norm"]
-    encoder_dropout = config["encoder_dropout"]
-    interaction_dropout = config["interaction_dropout"]
+def build_model(
+    config: DeltapropConfig, X_d_scaler: StandardScaler | None
+) -> DeltaProp:
+    depth = config.depth
+    ffn_hidden_dim = config.ffn_hidden_dim
+    ffn_num_layers = config.ffn_num_layers
+    message_hidden_dim = config.message_hidden_dim
+    batch_norm = config.batch_norm
+    encoder_dropout = config.encoder_dropout
+    interaction_dropout = config.interaction_dropout
 
     if X_d_scaler is not None:
         X_d_transform = ScaleTransform.from_standard_scaler(X_d_scaler)
