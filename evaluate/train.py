@@ -104,7 +104,7 @@ def train_and_evaluate_split(
     train_config: TrainConfig,
 ):
     train_mol_ds, val_mol_ds, test_mol_ds, X_d_scaler = prepare_mol_datasets(
-        train_df, val_df, test_df, model_module.get_molecule_datapoint
+        train_df, val_df, test_df, model_module
     )
 
     model = model_module.train_func(
