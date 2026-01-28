@@ -1,8 +1,6 @@
-from dataclasses import dataclass
-from enum import StrEnum, auto
-
 import chemprop as cp
 import numpy as np
+from config import SplitType, TrainConfig
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
@@ -14,6 +12,8 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit, KFold, ShuffleSplit
+
+from models.config import BaselineConfig, DeltapropConfig
 
 
 def get_group_splitters(random_state, n_outer):
@@ -30,11 +30,6 @@ def get_random_splitters(random_state, n_outer):
     outer_splitter = KFold(n_splits=n_outer, shuffle=True, random_state=random_state)
     inner_spliter = ShuffleSplit(1, test_size=0.5, random_state=random_state)
     return outer_splitter, inner_spliter
-
-
-class SplitType(StrEnum):
-    RANDOM = auto()
-    SCAFFOLD = auto()
 
 
 def generate_repeated_5xn_splits(df, n: int, split_type: SplitType, random_state: int):
@@ -99,26 +94,13 @@ def calc_metrics(pred_probs, preds, labels):
     }
 
 
-@dataclass
-class TrainConfig:
-    batch_size: int
-    max_epochs: int
-    early_stopping_patience: int
-
-
-@dataclass
-class CVConfig:
-    n_splits: int
-    split_type: SplitType
-
-
 def train_and_evaluate_split(
     train_df,
     val_df,
     test_df,
     df_classification_threshold,
     model_module,
-    random_seed,
+    model_config: DeltapropConfig | BaselineConfig,
     train_config: TrainConfig,
 ):
     train_mol_ds, val_mol_ds, test_mol_ds, X_d_scaler = prepare_mol_datasets(
@@ -126,7 +108,7 @@ def train_and_evaluate_split(
     )
 
     model = model_module.train_func(
-        config=model_module.DEFAULT_CONFIG,
+        config=model_config,
         train_mol_ds=train_mol_ds,
         val_mol_ds=val_mol_ds,
         X_d_scaler=X_d_scaler,
@@ -134,7 +116,7 @@ def train_and_evaluate_split(
         batch_size=train_config.batch_size,
         max_epochs=train_config.max_epochs,
         early_stopping_patience=train_config.early_stopping_patience,
-        random_seed=random_seed,
+        random_seed=train_config.random_seed,
     )
 
     clf_th = model_module.tune_binary_classification_threshold(
@@ -142,7 +124,7 @@ def train_and_evaluate_split(
         train_mol_ds=train_mol_ds,
         val_mol_ds=val_mol_ds,
         val_labels=val_df["bin_target"],
-        random_seed=random_seed,
+        random_seed=train_config.random_seed,
     )
 
     pred_probs, preds = model_module.predict_func(
@@ -159,12 +141,14 @@ def train_and_evaluate(
     df,
     df_classification_threshold: float,
     model_module,
-    random_seed: int,
+    model_config: DeltapropConfig | BaselineConfig,
     train_config: TrainConfig,
-    cv_config: CVConfig,
 ):
     splits = generate_repeated_5xn_splits(
-        df, cv_config.n_splits, cv_config.split_type, random_state=random_seed
+        df,
+        train_config.n_splits,
+        train_config.split_type,
+        random_state=train_config.random_seed,
     )
     for split_idxs, split in splits:
         outer_idx, inner_idx = split_idxs
@@ -176,7 +160,7 @@ def train_and_evaluate(
             test_df=test_df,
             df_classification_threshold=df_classification_threshold,
             model_module=model_module,
-            random_seed=random_seed,
+            model_config=model_config,
             train_config=train_config,
         )
 
