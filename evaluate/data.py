@@ -54,7 +54,7 @@ def getMolDescriptors(mol):
         with BlockLogs():
             try:
                 val = fn(mol)
-            except Exception as e:
+            except Exception:
                 val = None
 
         res[nm] = val

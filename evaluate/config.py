@@ -1,8 +1,6 @@
 from dataclasses import dataclass
 from enum import StrEnum, auto
 
-RANDOM_SEED = 42
-
 
 class SplitType(StrEnum):
     RANDOM = auto()
