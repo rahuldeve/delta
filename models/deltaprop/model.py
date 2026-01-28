@@ -15,8 +15,8 @@ from lightning.pytorch.core.mixins.hparams_mixin import HyperparametersMixin
 from sklearn.preprocessing import StandardScaler
 from torch import Tensor, nn, optim
 
-from deltaprop.config import DeltapropConfig
-from deltaprop.data import RandomPairTrainBatch
+from models.config import DeltapropConfig
+from models.deltaprop.data import RandomPairTrainBatch
 
 logger = logging.getLogger(__name__)
 

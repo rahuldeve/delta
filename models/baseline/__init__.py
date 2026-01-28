@@ -22,7 +22,7 @@ from ray import tune
 from ray.tune.integration.pytorch_lightning import TuneReportCheckpointCallback
 from sklearn.preprocessing import StandardScaler
 
-from baseline.config import BaselineConfig
+from models.config import BaselineConfig
 from evaluate.data import set_seeds
 
 
