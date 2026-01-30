@@ -190,9 +190,20 @@ def predict_func(
 
     pos_mask = train_mol_ds.Y.squeeze() > binary_classification_threshold
     neg_mask = ~pos_mask
-    pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
-    neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
-    pred_probs = (pos_contrib + neg_contrib) / 2
+    
+    pos_contrib = pred_probs[:, pos_mask]
+    neg_contrib = pred_probs[:, neg_mask]
+    if pos_contrib.shape[-1] == 0:
+        pred_probs = neg_contrib.mean(axis=-1)
+
+    elif neg_contrib.shape[-1] == 0:
+        pred_probs = pos_contrib.mean(axis=-1)
+
+    else:
+        pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
+        neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
+        pred_probs = (pos_contrib + neg_contrib) / 2
+
     preds = (pred_probs >= binary_classification_threshold).astype(float)
 
     return pred_probs, preds
@@ -222,9 +233,19 @@ def tune_binary_classification_threshold(
 
     pos_mask = train_mol_ds.Y.squeeze() > binary_classification_threshold
     neg_mask = ~pos_mask
-    pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
-    neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
-    pred_probs = (pos_contrib + neg_contrib) / 2
+    
+    pos_contrib = pred_probs[:, pos_mask]
+    neg_contrib = pred_probs[:, neg_mask]
+    if pos_contrib.shape[-1] == 0:
+        pred_probs = neg_contrib.mean(axis=-1)
+
+    elif neg_contrib.shape[-1] == 0:
+        pred_probs = pos_contrib.mean(axis=-1)
+
+    else:
+        pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
+        neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
+        pred_probs = (pos_contrib + neg_contrib) / 2
 
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
     optimal_threshold = optimize_threshold_from_predictions(
