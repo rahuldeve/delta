@@ -123,6 +123,7 @@ def train_and_evaluate_split(
         model=model,
         train_mol_ds=train_mol_ds,
         val_mol_ds=val_mol_ds,
+        binary_classification_threshold = df_classification_threshold,
         val_labels=val_df["bin_target"],
         random_seed=train_config.random_seed,
     )
