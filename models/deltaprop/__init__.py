@@ -14,10 +14,10 @@ from scipy.interpolate import interp1d
 from sklearn.isotonic import IsotonicRegression
 from sklearn.preprocessing import StandardScaler
 
-from deltaprop.config import DeltapropConfig
-from deltaprop.data import setup_train_val_dataloaders
-from deltaprop.model import DeltaProp, build_model
 from evaluate.data import set_seeds
+from models.config import DeltapropConfig
+from models.deltaprop.data import setup_train_val_dataloaders
+from models.deltaprop.model import DeltaProp, build_model
 
 
 def get_molecule_datapoint(row):
