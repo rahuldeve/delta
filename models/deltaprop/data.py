@@ -52,7 +52,7 @@ class RandomPairDataset(Dataset):
         exemplar_mask = targets > self.binary_threshold
         non_exemplar_idxs = np.argwhere(~exemplar_mask).squeeze()
 
-        candidate_idxs = np.random.choice(non_exemplar_idxs, size=(n,), replace=False)
+        candidate_idxs = np.random.choice(non_exemplar_idxs, size=(n,), replace=True)
         return [self.candidate_dataset[idx] for idx in candidate_idxs]
 
     def __getitem__(self, idx) -> RandomPairDataPoint:
