@@ -232,7 +232,7 @@ def tune_binary_classification_threshold(
 
         ensemble_idxs.append(int(np.array(scores).argmax()))
 
-    ensemble_pred_probs = pred_probs[:, ensemble_idxs]
+    ensemble_pred_probs = pred_probs[:, ensemble_idxs].mean(axis=-1)
     
 
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
