@@ -228,10 +228,10 @@ def tune_binary_classification_threshold(
 
 
     N = len(ensemble_idxs)
-    for _ in range(max(N//2, 100)):
+    for _ in range(max(N, 100)):
         scores = []
         for idx in range(train_embeds.shape[0]):
-            if idx in ensemble_idxs:
+            if pos_mask[idx]:
                 scores.append(float("-inf"))
                 continue
             
