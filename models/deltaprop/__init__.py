@@ -220,7 +220,15 @@ def tune_binary_classification_threshold(
 
 
     ensemble_idxs = []
-    for _ in range(100):
+
+    pos_mask = train_mol_ds.Y.squeeze() > binary_classification_threshold
+    for idx, val in enumerate(pos_mask):
+        if val:
+            ensemble_idxs.append(idx)
+
+
+    N = len(ensemble_idxs)
+    for _ in range(max(N//2, 100)):
         scores = []
         for idx in range(train_embeds.shape[0]):
             if idx in ensemble_idxs:
