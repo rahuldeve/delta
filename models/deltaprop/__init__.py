@@ -12,6 +12,7 @@ from ray import tune
 from ray.tune.integration.pytorch_lightning import TuneReportCheckpointCallback
 from scipy.interpolate import interp1d
 from sklearn.isotonic import IsotonicRegression
+from sklearn.metrics import average_precision_score
 from sklearn.preprocessing import StandardScaler
 
 from evaluate.data import set_seeds
@@ -173,6 +174,7 @@ def predict_func(
     binary_classification_threshold: float,
     train_mol_ds: MoleculeDataset,
     test_mol_ds: MoleculeDataset,
+    ensemble_idxs: list[int]
 ):
     model.eval()
 
@@ -181,29 +183,14 @@ def predict_func(
 
     with torch.no_grad():
         pred_probs = (
-            model.interaction(test_embeds, train_embeds)
+            model.interaction(test_embeds, train_embeds[ensemble_idxs, :])
             .sigmoid()
             .squeeze()
             .cpu()
             .numpy()
         )
 
-    pos_mask = train_mol_ds.Y.squeeze() > binary_classification_threshold
-    neg_mask = ~pos_mask
-    
-    pos_contrib = pred_probs[:, pos_mask]
-    neg_contrib = pred_probs[:, neg_mask]
-    if pos_contrib.shape[-1] == 0:
-        pred_probs = neg_contrib.mean(axis=-1)
-
-    elif neg_contrib.shape[-1] == 0:
-        pred_probs = pos_contrib.mean(axis=-1)
-
-    else:
-        pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
-        neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
-        pred_probs = (pos_contrib + neg_contrib) / 2
-
+    pred_probs = pred_probs.mean(axis=-1)
     preds = (pred_probs >= binary_classification_threshold).astype(float)
 
     return pred_probs, preds
@@ -231,28 +218,29 @@ def tune_binary_classification_threshold(
             .numpy()
         )
 
-    pos_mask = train_mol_ds.Y.squeeze() > binary_classification_threshold
-    neg_mask = ~pos_mask
+
+    ensemble_idxs = []
+    for _ in range(100):
+        scores = []
+        for idx in range(train_embeds.shape[0]):
+            # if idx in ensemble_idxs:
+            #     scores.append(float("-inf"))
+            #     continue
+            
+            ensemble_pred_probs = pred_probs[:, ensemble_idxs + [idx]].mean(axis=-1)
+            scores.append(average_precision_score(val_labels, ensemble_pred_probs))
+
+        ensemble_idxs.append(int(np.array(scores).argmax()))
+
+    ensemble_pred_probs = pred_probs[:, ensemble_idxs]
     
-    pos_contrib = pred_probs[:, pos_mask]
-    neg_contrib = pred_probs[:, neg_mask]
-    if pos_contrib.shape[-1] == 0:
-        pred_probs = neg_contrib.mean(axis=-1)
-
-    elif neg_contrib.shape[-1] == 0:
-        pred_probs = pos_contrib.mean(axis=-1)
-
-    else:
-        pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
-        neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
-        pred_probs = (pos_contrib + neg_contrib) / 2
 
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
     optimal_threshold = optimize_threshold_from_predictions(
         labels=val_labels,
-        probs=pred_probs,
+        probs=ensemble_pred_probs,
         thresholds=thresholds,
         random_seed=random_seed,
     )
 
-    return optimal_threshold
+    return optimal_threshold, ensemble_idxs
