@@ -12,7 +12,7 @@ class TrainConfig:
     batch_size: int = 8
     max_epochs: int = 30
     early_stopping_patience: int = 10
-    n_splits: int = 2
+    n_splits: int = 5
     split_type: SplitType = SplitType.RANDOM
     random_seed: int = 42
 
