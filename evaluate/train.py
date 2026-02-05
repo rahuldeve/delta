@@ -119,7 +119,7 @@ def train_and_evaluate_split(
         random_seed=train_config.random_seed,
     )
 
-    clf_th = model_module.tune_binary_classification_threshold(
+    clf_th, ensemble_idxs = model_module.tune_binary_classification_threshold(
         model=model,
         train_mol_ds=train_mol_ds,
         val_mol_ds=val_mol_ds,
@@ -133,6 +133,7 @@ def train_and_evaluate_split(
         binary_classification_threshold=clf_th,
         train_mol_ds=train_mol_ds,
         test_mol_ds=test_mol_ds,
+        ensemble_idxs=ensemble_idxs
     )
 
     return calc_metrics(pred_probs, preds, test_df["bin_target"])
