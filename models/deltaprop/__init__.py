@@ -223,9 +223,9 @@ def tune_binary_classification_threshold(
     for _ in range(100):
         scores = []
         for idx in range(train_embeds.shape[0]):
-            # if idx in ensemble_idxs:
-            #     scores.append(float("-inf"))
-            #     continue
+            if idx in ensemble_idxs:
+                scores.append(float("-inf"))
+                continue
             
             ensemble_pred_probs = pred_probs[:, ensemble_idxs + [idx]].mean(axis=-1)
             scores.append(average_precision_score(val_labels, ensemble_pred_probs))
