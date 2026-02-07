@@ -9,6 +9,7 @@ class BaselineConfig:
     message_hidden_dim: int = 300
     batch_norm: bool = False
     encoder_dropout: float = 0.0
+    use_chameleon_mp: bool = False
 
 
 @dataclass

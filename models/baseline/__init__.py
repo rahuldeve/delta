@@ -58,7 +58,13 @@ def build_model(config: BaselineConfig, X_d_scaler: StandardScaler | None):
         X_d_transform = None
         num_mol_feats = 0
 
-    mp = BondMessagePassing(d_h=message_hidden_dim, depth=depth)  # type: ignore
+    if config.use_chameleon_mp:
+        chemeleon_mp = torch.load("../chemeleon_mp.pt", weights_only=True)
+        mp = BondMessagePassing(**chemeleon_mp['hyper_parameters']) # type: ignore
+        mp.load_state_dict(chemeleon_mp['state_dict'])
+    else:
+        mp = BondMessagePassing(d_h=message_hidden_dim, depth=depth)  # type: ignore
+    
     agg = NormAggregation()
     ffn_dims = mp.output_dim + num_mol_feats
     ffn = BinaryClassificationFFN(
