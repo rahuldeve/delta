@@ -9,11 +9,11 @@ class SplitType(StrEnum):
 
 @dataclass
 class TrainConfig:
-    batch_size: int = 8
-    max_epochs: int = 30
-    early_stopping_patience: int = 10
+    batch_size: int = 64
+    max_epochs: int = 50
+    early_stopping_patience: int = 20
     n_splits: int = 5
-    split_type: SplitType = SplitType.RANDOM
+    split_type: SplitType = SplitType.SCAFFOLD
     random_seed: int = 42
 
 

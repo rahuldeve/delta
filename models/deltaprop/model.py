@@ -6,7 +6,7 @@ from typing import Self
 import torch
 from chemprop.conf import DEFAULT_HIDDEN_DIM
 from chemprop.data import BatchMolGraph, TrainingBatch
-from chemprop.nn import Aggregation, BondMessagePassing, MeanAggregation, MessagePassing
+from chemprop.nn import Aggregation, BondMessagePassing, NormAggregation, MessagePassing
 from chemprop.nn.ffn import MLP
 from chemprop.nn.transforms import ScaleTransform
 from chemprop.schedulers import build_NoamLike_LRSched
@@ -361,14 +361,6 @@ class DeltaProp(pl.LightningModule):
 def build_model(
     config: DeltapropConfig, X_d_scaler: StandardScaler | None
 ) -> DeltaProp:
-    depth = config.depth
-    ffn_hidden_dim = config.ffn_hidden_dim
-    ffn_num_layers = config.ffn_num_layers
-    message_hidden_dim = config.message_hidden_dim
-    batch_norm = config.batch_norm
-    encoder_dropout = config.encoder_dropout
-    interaction_dropout = config.interaction_dropout
-
     if X_d_scaler is not None:
         X_d_transform = ScaleTransform.from_standard_scaler(X_d_scaler)
         num_mol_feats = X_d_scaler.n_features_in_
@@ -376,18 +368,20 @@ def build_model(
         X_d_transform = None
         num_mol_feats = 0
 
-    mp = BondMessagePassing(d_h=message_hidden_dim, depth=depth)  # type: ignore
-    agg = MeanAggregation()
+    mp = BondMessagePassing(
+        d_h=config.mp_d_h,
+        depth=config.mp_depth,
+        dropout=config.mp_dropout,
+    )  # type: ignore
+    agg = NormAggregation()
     ffn_dims = mp.output_dim + num_mol_feats
     encoder = Encoder(
         input_dim=ffn_dims,
-        hidden_dim=ffn_hidden_dim,
-        output_dim=message_hidden_dim,
-        n_layers=ffn_num_layers,
+        hidden_dim=config.encoder_hidden_dim,
+        output_dim=config.encoder_output_dim,
         activation=torch.nn.PReLU(),
-        dropout=encoder_dropout,
     )
-    interaction = Interaction(encoder.output_dim, dropout=interaction_dropout)
+    interaction = Interaction(encoder.output_dim, dropout=config.interaction_dropout)
 
     X_d_transform = (
         ScaleTransform.from_standard_scaler(X_d_scaler)
@@ -399,8 +393,8 @@ def build_model(
         agg,
         encoder,
         interaction,
-        batch_norm=batch_norm,
         X_d_transform=X_d_transform,
+        batch_norm=config.batch_norm,
     )
 
     return model

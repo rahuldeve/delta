@@ -45,12 +45,6 @@ def seed_worker(worker_id):
 
 
 def build_model(config: BaselineConfig, X_d_scaler: StandardScaler | None):
-    depth = config.depth
-    ffn_hidden_dim = config.ffn_hidden_dim
-    ffn_num_layers = config.ffn_num_layers
-    message_hidden_dim = config.message_hidden_dim
-    batch_norm = config.batch_norm
-
     if X_d_scaler is not None:
         X_d_transform = ScaleTransform.from_standard_scaler(X_d_scaler)
         num_mol_feats = X_d_scaler.n_features_in_
@@ -58,21 +52,34 @@ def build_model(config: BaselineConfig, X_d_scaler: StandardScaler | None):
         X_d_transform = None
         num_mol_feats = 0
 
-    mp = BondMessagePassing(d_h=message_hidden_dim, depth=depth)  # type: ignore
+    mp = BondMessagePassing(
+        d_h=config.mp_d_h,
+        depth=config.mp_depth,
+        dropout=config.mp_dropout,
+    )  # type: ignore
     agg = NormAggregation()
     ffn_dims = mp.output_dim + num_mol_feats
     ffn = BinaryClassificationFFN(
         n_tasks=1,
         input_dim=ffn_dims,
-        hidden_dim=ffn_hidden_dim,
-        n_layers=ffn_num_layers,
+        hidden_dim=config.ffn_hidden_dim,
+        n_layers=config.ffn_n_layers,
+        dropout=config.ffn_dropout,
     )  # type: ignore
+
     metric_list = [
         metrics.BinaryF1Score(),
         metrics.BinaryAUPRC(),
         metrics.BinaryAUROC(),
     ]
-    return MPNN(mp, agg, ffn, batch_norm, metric_list, X_d_transform=X_d_transform)
+    return MPNN(
+        mp,
+        agg,
+        ffn,
+        metrics=metric_list,
+        X_d_transform=X_d_transform,
+        batch_norm=config.batch_norm,
+    )
 
 
 def train_func(
