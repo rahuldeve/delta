@@ -172,6 +172,7 @@ def predict_func(
     model: DeltaProp,
     binary_classification_threshold: float,
     train_mol_ds: MoleculeDataset,
+    train_labels: np.typing.NDArray[np.bool],
     test_mol_ds: MoleculeDataset,
 ):
     model.eval()
@@ -188,7 +189,7 @@ def predict_func(
             .numpy()
         )
 
-    pos_mask = train_mol_ds.Y.squeeze() > binary_classification_threshold
+    pos_mask = train_labels
     neg_mask = ~pos_mask
     
     pos_contrib = pred_probs[:, pos_mask]
@@ -212,8 +213,8 @@ def predict_func(
 def tune_binary_classification_threshold(
     model: DeltaProp,
     train_mol_ds: MoleculeDataset,
+    train_labels: np.typing.NDArray[np.bool],
     val_mol_ds: MoleculeDataset,
-    binary_classification_threshold: float,
     val_labels,
     random_seed: int,
 ):
@@ -231,7 +232,7 @@ def tune_binary_classification_threshold(
             .numpy()
         )
 
-    pos_mask = train_mol_ds.Y.squeeze() > binary_classification_threshold
+    pos_mask = train_labels
     neg_mask = ~pos_mask
     
     pos_contrib = pred_probs[:, pos_mask]
