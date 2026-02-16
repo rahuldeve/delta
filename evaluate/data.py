@@ -123,3 +123,15 @@ def load_gsk_hepg2():
     df["cont_target"] = df["per_inhibition"] / 100
     df["bin_target"] = df["cont_target"] > 0.5
     return df, 0.5
+
+
+def load_pk():
+    df = pd.read_csv("../datasets/PK.csv")
+    df = df.loc[:, ['mol', 'AUC']]
+    df.columns = ["smiles", 'auc']
+    df = df.dropna().reset_index(drop=True)
+
+    df = preprocess_ray(df)
+    df["cont_target"] = df["auc"]
+    df["bin_target"] = df["cont_target"] > 1000
+    return df, 1000

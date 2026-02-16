@@ -15,12 +15,13 @@ class SupportedDatasets(Enum):
     SINGLE_TARGET_TBA = auto()
     DUAL_TARGET_TBA = auto()
     GSK_HEPG2 = auto()
+    PK = auto()
 
 
 def prepare_dataset(dataset: SupportedDatasets):
     # Lazy import here to prevent cli startup from being slow
     import ray
-    from data import load_dual_target_tba, load_gsk_hepg2, load_single_target_tba
+    from data import load_dual_target_tba, load_gsk_hepg2, load_single_target_tba, load_pk
 
     ray.init(ignore_reinit_error=True, num_cpus=4, runtime_env={"working_dir": "../"})
 
@@ -30,6 +31,8 @@ def prepare_dataset(dataset: SupportedDatasets):
         df, df_classification_threshold = load_dual_target_tba()
     elif dataset == SupportedDatasets.GSK_HEPG2:
         df, df_classification_threshold = load_gsk_hepg2()
+    elif dataset == SupportedDatasets.PK:
+        df, df_classification_threshold = load_pk()
     else:
         raise ValueError(dataset)
 
