@@ -67,7 +67,7 @@ def preprocess_row(row):
 
     if mol is None:
         return dict(inchi=None, scaffold=None) | {
-            name: None for name in Descriptors.descList
+            name: None for name, _ in Descriptors.descList
         }
 
     return dict(
