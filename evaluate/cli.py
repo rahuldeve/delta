@@ -21,7 +21,12 @@ class SupportedDatasets(Enum):
 def prepare_dataset(dataset: SupportedDatasets):
     # Lazy import here to prevent cli startup from being slow
     import ray
-    from data import load_dual_target_tba, load_gsk_hepg2, load_single_target_tba, load_pk
+    from data import (
+        load_dual_target_tba,
+        load_gsk_hepg2,
+        load_single_target_tba,
+        load_pk,
+    )
 
     ray.init(ignore_reinit_error=True, num_cpus=4, runtime_env={"working_dir": "../"})
 
@@ -73,7 +78,7 @@ def baseline(
                 result_dict
                 | asdict(model_cf)
                 | asdict(train_cf)
-                | dict(dataset=dataset, model='baseline')
+                | dict(dataset=dataset, model="baseline")
             )
 
         print(result_dict)
@@ -113,7 +118,7 @@ def deltaprop(
                 result_dict
                 | asdict(model_cf)
                 | asdict(train_cf)
-                | dict(dataset=dataset, model='deltaprop')
+                | dict(dataset=dataset, model="deltaprop")
             )
 
         print(result_dict)
