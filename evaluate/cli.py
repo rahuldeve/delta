@@ -73,7 +73,7 @@ def baseline(
                 result_dict
                 | asdict(model_cf)
                 | asdict(train_cf)
-                | dict(dataset=dataset)
+                | dict(dataset=dataset, model='baseline')
             )
 
         print(result_dict)
@@ -113,7 +113,7 @@ def deltaprop(
                 result_dict
                 | asdict(model_cf)
                 | asdict(train_cf)
-                | dict(dataset=dataset)
+                | dict(dataset=dataset, model='deltaprop')
             )
 
         print(result_dict)
