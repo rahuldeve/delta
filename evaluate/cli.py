@@ -60,7 +60,8 @@ def baseline(
         import wandb
 
         wandb.login(key="cf344975eb80edf6f0d52af80528cc6094234caf")
-        run = wandb.init(project=wandb_cf.project_name, tags=wandb_cf.tags)
+        tags = set(wandb_cf.tags) | set(['baseline', dataset.name.lower(), train_cf.split_type])
+        run = wandb.init(project=wandb_cf.project_name, tags=list(tags))
         run.mark_preempting()
 
     df, df_classification_threshold = prepare_dataset(dataset)
@@ -100,7 +101,8 @@ def deltaprop(
         import wandb
 
         wandb.login(key="cf344975eb80edf6f0d52af80528cc6094234caf")
-        run = wandb.init(project=wandb_cf.project_name, tags=wandb_cf.tags)
+        tags = set(wandb_cf.tags) | set(['deltaprop', dataset.name.lower(), train_cf.split_type])
+        run = wandb.init(project=wandb_cf.project_name, tags=list(tags))
         run.mark_preempting()
 
     df, df_classification_threshold = prepare_dataset(dataset)
