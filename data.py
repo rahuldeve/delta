@@ -9,6 +9,20 @@ from rdkit.Chem import Descriptors
 from rdkit.Chem.MolStandardize import rdMolStandardize  # type: ignore
 from rdkit.Chem.Scaffolds.MurckoScaffold import MurckoScaffoldSmiles
 from rdkit.rdBase import BlockLogs
+from dataclasses import dataclass
+
+
+@dataclass
+class GT:
+    th: float
+
+
+@dataclass
+class LT:
+    th: float
+
+
+type DSThreshold = GT | LT
 
 
 def set_seeds(seed):
@@ -100,7 +114,7 @@ def load_single_target_tba():
     df = preprocess_ray(df)
     df["cont_target"] = df["parent_remaining_24"].round(1) / 100
     df["bin_target"] = df["cont_target"] > 0.5
-    return df, 0.5
+    return df, GT(0.50)
 
 
 def load_dual_target_tba():
@@ -111,7 +125,7 @@ def load_dual_target_tba():
         df["parent_remaining_24"].round(1) / 100 + df["metabolite_detected"]
     )
     df["bin_target"] = df["cont_target"] > 1.5
-    return df, 1.5
+    return df, GT(1.5)
 
 
 def load_gsk_hepg2():
@@ -122,7 +136,19 @@ def load_gsk_hepg2():
     df = preprocess_ray(df)
     df["cont_target"] = df["per_inhibition"] / 100
     df["bin_target"] = df["cont_target"] > 0.5
-    return df, 0.5
+    return df, GT(0.5)
+
+
+def load_derbyshire_malaria():
+    df = pd.read_csv("../datasets/Derbyshire_malaria.csv")
+    cols = ["Compound SMILES", "Parasite % Control Avg"]
+    df = df.loc[:, cols]
+    df.columns = ["smiles", "parasite_remain_per"]
+
+    df = preprocess_ray(df)
+    df["cont_target"] = df["parasite_remain_per"] / 100
+    df["bin_target"] = df["cont_target"] < 0.15
+    return df, LT(0.15)
 
 
 def load_pk():
@@ -134,4 +160,4 @@ def load_pk():
     df = preprocess_ray(df)
     df["cont_target"] = df["auc"]
     df["bin_target"] = df["cont_target"] > 1000
-    return df, 1000
+    return df, GT(1000)

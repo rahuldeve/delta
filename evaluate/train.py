@@ -13,6 +13,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit, KFold, ShuffleSplit
 
+from data import DSThreshold
 from models.config import BaselineConfig, DeltapropConfig
 
 
@@ -98,7 +99,7 @@ def train_and_evaluate_split(
     train_df,
     val_df,
     test_df,
-    df_classification_threshold,
+    df_classification_threshold: DSThreshold,
     model_module,
     model_config: DeltapropConfig | BaselineConfig,
     train_config: TrainConfig,
@@ -126,6 +127,7 @@ def train_and_evaluate_split(
         val_mol_ds=val_mol_ds,
         val_labels=val_df["bin_target"],
         random_seed=train_config.random_seed,
+        df_classification_threshold=df_classification_threshold
     )
 
     pred_probs, preds = model_module.predict_func(
@@ -134,6 +136,7 @@ def train_and_evaluate_split(
         train_mol_ds=train_mol_ds,
         train_labels=train_df["bin_target"],
         test_mol_ds=test_mol_ds,
+        df_classification_threshold=df_classification_threshold
     )
 
     return calc_metrics(pred_probs, preds, test_df["bin_target"])
@@ -141,7 +144,7 @@ def train_and_evaluate_split(
 
 def train_and_evaluate(
     df,
-    df_classification_threshold: float,
+    df_classification_threshold: DSThreshold,
     model_module,
     model_config: DeltapropConfig | BaselineConfig,
     train_config: TrainConfig,

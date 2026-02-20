@@ -5,7 +5,7 @@ from ray.tune.search import ConcurrencyLimiter
 from ray.tune.search.optuna import OptunaSearch
 from sklearn.preprocessing import StandardScaler
 
-from evaluate.data import RANDOM_SEED
+from data import RANDOM_SEED
 
 
 def tune_model(

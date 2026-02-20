@@ -4,31 +4,36 @@ from typing import NamedTuple
 
 import numpy as np
 import torch
-from chemprop import data
-from chemprop.data import MoleculeDataset
+from chemprop.data import MoleculeDataset, collate, dataloader, datasets
 from torch.utils.data import DataLoader, Dataset
+
+from data import GT, LT, DSThreshold
 
 
 class RandomPairDataPoint(NamedTuple):
-    anchor: data.datasets.Datum
-    candidates: list[data.datasets.Datum]
+    anchor: datasets.Datum
+    candidates: list[datasets.Datum]
 
 
 class RandomPairTrainBatch(NamedTuple):
-    anchor: data.collate.TrainingBatch
-    candidates: data.collate.TrainingBatch
+    anchor: collate.TrainingBatch
+    candidates: collate.TrainingBatch
     B: int
     C: int
 
 
 class RandomPairDataset(Dataset):
     def __init__(
-        self, anchor_dataset, candidate_dataset, binary_threshold, n_candidates
+        self,
+        anchor_dataset: MoleculeDataset,
+        candidate_dataset: MoleculeDataset,
+        binary_threshold: DSThreshold,
+        n_candidates: int,
     ):
         super().__init__()
-        self.anchor_dataset: data.datasets.MoleculeDataset = anchor_dataset
-        self.candidate_dataset: data.datasets.MoleculeDataset = candidate_dataset
-        self.n_candidates: int = n_candidates
+        self.anchor_dataset = anchor_dataset
+        self.candidate_dataset = candidate_dataset
+        self.n_candidates = n_candidates
         self.binary_threshold = binary_threshold
 
     def __len__(self):
@@ -36,7 +41,13 @@ class RandomPairDataset(Dataset):
 
     def get_exemplar_candidates(self):
         targets = self.candidate_dataset.Y.squeeze()
-        exemplar_mask = targets > self.binary_threshold
+        if isinstance(self.binary_threshold, GT):
+            exemplar_mask = targets > self.binary_threshold.th
+        elif isinstance(self.binary_threshold, LT):
+            exemplar_mask = targets < self.binary_threshold.th
+        else:
+            raise ValueError(self.binary_threshold)
+
         exemplar_idxs = np.argwhere(exemplar_mask).squeeze()
 
         selected_idxs = np.random.choice(
@@ -49,7 +60,14 @@ class RandomPairDataset(Dataset):
 
     def get_random_candidates(self, n):
         targets = self.candidate_dataset.Y.squeeze()
-        exemplar_mask = targets > self.binary_threshold
+        
+        if isinstance(self.binary_threshold, GT):
+            exemplar_mask = targets > self.binary_threshold.th
+        elif isinstance(self.binary_threshold, LT):
+            exemplar_mask = targets < self.binary_threshold.th
+        else:
+            raise ValueError(self.binary_threshold)
+        
         non_exemplar_idxs = np.argwhere(~exemplar_mask).squeeze()
 
         candidate_idxs = np.random.choice(non_exemplar_idxs, size=(n,), replace=True)
@@ -70,10 +88,8 @@ class RandomPairDataset(Dataset):
         batch_anchors, batch_exemplars = zip(*batch)
         B = len(batch)
         C = len(batch_exemplars[0])
-        batch_anchors = data.dataloader.collate_batch(batch_anchors)
-        batch_exemplars = data.dataloader.collate_batch(
-            chain.from_iterable(batch_exemplars)
-        )
+        batch_anchors = dataloader.collate_batch(batch_anchors)
+        batch_exemplars = dataloader.collate_batch(chain.from_iterable(batch_exemplars))
         return RandomPairTrainBatch(batch_anchors, batch_exemplars, B, C)
 
 
@@ -86,7 +102,7 @@ def seed_worker(worker_id):
 def setup_train_val_dataloaders(
     train_mol_ds: MoleculeDataset,
     val_mol_ds: MoleculeDataset,
-    binary_threshold: float,
+    binary_threshold: DSThreshold,
     batch_size: int,
     candidate_size: int,
     num_workers: int = 8,

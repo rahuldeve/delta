@@ -14,7 +14,7 @@ from scipy.interpolate import interp1d
 from sklearn.isotonic import IsotonicRegression
 from sklearn.preprocessing import StandardScaler
 
-from evaluate.data import set_seeds
+from data import set_seeds, DSThreshold, LT
 from models.config import DeltapropConfig
 from models.deltaprop.data import setup_train_val_dataloaders
 from models.deltaprop.model import DeltaProp, build_model
@@ -36,7 +36,7 @@ def train_func(
     config: DeltapropConfig,
     train_mol_ds: MoleculeDataset,
     val_mol_ds: MoleculeDataset,
-    binary_threshold: float,
+    binary_threshold: DSThreshold,
     batch_size: int,
     random_seed: int,
     X_d_scaler: StandardScaler | None,
@@ -93,7 +93,7 @@ def tune_func(
     config,
     train_mol_ds: MoleculeDataset,
     val_mol_ds: MoleculeDataset,
-    binary_threshold: float,
+    binary_threshold: DSThreshold,
     batch_size: int,
     random_seed: int,
     X_d_scaler: StandardScaler | None,
@@ -171,6 +171,7 @@ def get_interpolate_prob(pred_prob, exemplar_vals, binary_threshold):
 def predict_func(
     model: DeltaProp,
     binary_classification_threshold: float,
+    df_classification_threshold: DSThreshold,
     train_mol_ds: MoleculeDataset,
     train_labels: np.typing.NDArray[np.bool],
     test_mol_ds: MoleculeDataset,
@@ -188,6 +189,11 @@ def predict_func(
             .cpu()
             .numpy()
         )
+
+    if isinstance(df_classification_threshold, LT):
+        # by default, pred_probs[i, j] contains prob(i > j)
+        # doing 1 - pred_probs will give us prob (i <= j)
+        pred_probs = 1 - pred_probs
 
     pos_mask = train_labels
     neg_mask = ~pos_mask
@@ -217,6 +223,7 @@ def tune_binary_classification_threshold(
     val_mol_ds: MoleculeDataset,
     val_labels,
     random_seed: int,
+    df_classification_threshold: DSThreshold,
 ):
     model.eval()
 
@@ -232,9 +239,14 @@ def tune_binary_classification_threshold(
             .numpy()
         )
 
+    if isinstance(df_classification_threshold, LT):
+        # by default, pred_probs[i, j] contains prob(i > j)
+        # doing 1 - pred_probs will give us prob (i <= j)
+        pred_probs = 1 - pred_probs
+
     pos_mask = train_labels
     neg_mask = ~pos_mask
-    
+
     pos_contrib = pred_probs[:, pos_mask]
     neg_contrib = pred_probs[:, neg_mask]
     if pos_contrib.shape[-1] == 0:

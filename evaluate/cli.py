@@ -16,6 +16,7 @@ class SupportedDatasets(Enum):
     DUAL_TARGET_TBA = auto()
     GSK_HEPG2 = auto()
     PK = auto()
+    DB_MALARIA = auto()
 
 
 def prepare_dataset(dataset: SupportedDatasets):
@@ -26,6 +27,7 @@ def prepare_dataset(dataset: SupportedDatasets):
         load_gsk_hepg2,
         load_single_target_tba,
         load_pk,
+        load_derbyshire_malaria
     )
 
     ray.init(ignore_reinit_error=True, num_cpus=4, runtime_env={"working_dir": "../"})
@@ -38,6 +40,8 @@ def prepare_dataset(dataset: SupportedDatasets):
         df, df_classification_threshold = load_gsk_hepg2()
     elif dataset == SupportedDatasets.PK:
         df, df_classification_threshold = load_pk()
+    elif dataset == SupportedDatasets.DB_MALARIA:
+        df, df_classification_threshold = load_derbyshire_malaria()
     else:
         raise ValueError(dataset)
 
@@ -93,7 +97,7 @@ def deltaprop(
     model_cf: DeltapropConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
 ):
-    from train import train_and_evaluate
+    from evaluate.train import train_and_evaluate
 
     from models import deltaprop
 
