@@ -1,6 +1,6 @@
 import chemprop as cp
 import numpy as np
-from config import SplitType, TrainConfig
+from evaluate.config import SplitType, TrainConfig
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
