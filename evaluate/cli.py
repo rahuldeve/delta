@@ -17,6 +17,7 @@ class SupportedDatasets(Enum):
     GSK_HEPG2 = auto()
     PK = auto()
     DB_MALARIA = auto()
+    DB_HEPG2 = auto()
 
 
 def prepare_dataset(dataset: SupportedDatasets):
