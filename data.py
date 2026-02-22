@@ -150,6 +150,17 @@ def load_derbyshire_malaria():
     df["bin_target"] = df["cont_target"] < 0.15
     return df, LT(0.15)
 
+def load_derbyshire_hepg2():
+    df = pd.read_csv("../datasets/Derbyshire_malaria.csv")
+    cols = ["Compound SMILES", "Liver % Control Avg"]
+    df = df.loc[:, cols]
+    df.columns = ["smiles", "liver_remain_per"]
+
+    df = preprocess_ray(df)
+    df["cont_target"] = df["liver_remain_per"] / 100
+    df["bin_target"] = df["cont_target"] < 0.5
+    return df, LT(0.5)
+
 
 def load_pk():
     df = pd.read_csv("../datasets/PK.csv")

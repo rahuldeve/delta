@@ -27,7 +27,8 @@ def prepare_dataset(dataset: SupportedDatasets):
         load_gsk_hepg2,
         load_single_target_tba,
         load_pk,
-        load_derbyshire_malaria
+        load_derbyshire_malaria,
+        load_derbyshire_hepg2
     )
 
     ray.init(ignore_reinit_error=True, num_cpus=4, runtime_env={"working_dir": "../"})
@@ -42,6 +43,8 @@ def prepare_dataset(dataset: SupportedDatasets):
         df, df_classification_threshold = load_pk()
     elif dataset == SupportedDatasets.DB_MALARIA:
         df, df_classification_threshold = load_derbyshire_malaria()
+    elif dataset == SupportedDatasets.DB_HEPG2:
+        df, df_classification_threshold = load_derbyshire_hepg2()
     else:
         raise ValueError(dataset)
 
