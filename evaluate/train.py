@@ -11,25 +11,28 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from sklearn.model_selection import GroupKFold, GroupShuffleSplit, KFold, ShuffleSplit
+from sklearn.model_selection import StratifiedKFold, StratifiedGroupKFold, StratifiedShuffleSplit
 
 from data import DSThreshold
 from models.config import BaselineConfig, DeltapropConfig
 
 
 def get_group_splitters(random_state, n_outer):
-    outer_splitter = GroupKFold(
+    outer_splitter = StratifiedGroupKFold(
         n_splits=n_outer,
         shuffle=True,  # type: ignore
         random_state=random_state,  # type: ignore
     )
-    inner_spliter = GroupShuffleSplit(1, test_size=0.5, random_state=random_state)
+    # Since StratifiedGroupShuffleSplit does not exist, we can use GroupShuffleSplit for
+    # splitting val and test to get around this issue
+    # ref: https://github.com/scikit-learn/scikit-learn/issues/12076#issuecomment-2047948563
+    inner_spliter = StratifiedKFold(n_splits=int(1/0.5), shuffle=True, random_state=random_state)
     return outer_splitter, inner_spliter
 
 
 def get_random_splitters(random_state, n_outer):
-    outer_splitter = KFold(n_splits=n_outer, shuffle=True, random_state=random_state)
-    inner_spliter = ShuffleSplit(1, test_size=0.5, random_state=random_state)
+    outer_splitter = StratifiedKFold(n_splits=n_outer, shuffle=True, random_state=random_state)
+    inner_spliter = StratifiedShuffleSplit(1, test_size=0.5, random_state=random_state)
     return outer_splitter, inner_spliter
 
 
@@ -46,13 +49,13 @@ def generate_repeated_5xn_splits(df, n: int, split_type: SplitType, random_state
             raise ValueError(split_type)
 
         for inner_idx, (train_idxs, val_test_idxs) in enumerate(
-            outer_splitter.split(df, groups=df["cluster"])
+            outer_splitter.split(df, y=df["bin_target"], groups=df["cluster"])
         ):
             train_df = df.loc[train_idxs].reset_index(drop=True)
             val_test_df = df.loc[val_test_idxs].reset_index(drop=True)
 
             val_idxs, test_idxs = next(
-                inner_spliter.split(val_test_df, groups=val_test_df["cluster"])
+                inner_spliter.split(val_test_df, y=val_test_df["bin_target"], groups=val_test_df["cluster"])
             )
 
             val_df = val_test_df.loc[val_idxs].reset_index(drop=True)
