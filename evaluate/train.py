@@ -1,6 +1,5 @@
 import chemprop as cp
 import numpy as np
-from evaluate.config import SplitType, TrainConfig
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
@@ -11,9 +10,14 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from sklearn.model_selection import StratifiedKFold, StratifiedGroupKFold, StratifiedShuffleSplit
+from sklearn.model_selection import (
+    StratifiedGroupKFold,
+    StratifiedKFold,
+    StratifiedShuffleSplit,
+)
 
 from data import DSThreshold
+from evaluate.config import SplitType, TrainConfig
 from models.config import BaselineConfig, DeltapropConfig
 
 
@@ -26,12 +30,16 @@ def get_group_splitters(random_state, n_outer):
     # Since StratifiedGroupShuffleSplit does not exist, we can use GroupShuffleSplit for
     # splitting val and test to get around this issue
     # ref: https://github.com/scikit-learn/scikit-learn/issues/12076#issuecomment-2047948563
-    inner_spliter = StratifiedKFold(n_splits=int(1/0.5), shuffle=True, random_state=random_state)
+    inner_spliter = StratifiedKFold(
+        n_splits=int(1 / 0.5), shuffle=True, random_state=random_state
+    )
     return outer_splitter, inner_spliter
 
 
 def get_random_splitters(random_state, n_outer):
-    outer_splitter = StratifiedKFold(n_splits=n_outer, shuffle=True, random_state=random_state)
+    outer_splitter = StratifiedKFold(
+        n_splits=n_outer, shuffle=True, random_state=random_state
+    )
     inner_spliter = StratifiedShuffleSplit(1, test_size=0.5, random_state=random_state)
     return outer_splitter, inner_spliter
 
@@ -43,19 +51,28 @@ def generate_repeated_5xn_splits(df, n: int, split_type: SplitType, random_state
 
         if split_type == SplitType.RANDOM:
             outer_splitter, inner_spliter = get_random_splitters(randint, n_outer=n)
+            group_col_getter = lambda _df: None  # noqa: E731
         elif split_type == SplitType.SCAFFOLD:
             outer_splitter, inner_spliter = get_group_splitters(randint, n_outer=n)
+            group_col_getter = lambda _df: _df["scaffold_cluster"]  # noqa: E731
+        elif split_type == SplitType.BUTINA:
+            outer_splitter, inner_spliter = get_group_splitters(randint, n_outer=n)
+            group_col_getter = lambda _df: _df["butina_cluster"]  # noqa: E731
         else:
             raise ValueError(split_type)
 
         for inner_idx, (train_idxs, val_test_idxs) in enumerate(
-            outer_splitter.split(df, y=df["bin_target"], groups=df["cluster"])
+            outer_splitter.split(df, y=df["bin_target"], groups=group_col_getter(df))
         ):
             train_df = df.loc[train_idxs].reset_index(drop=True)
             val_test_df = df.loc[val_test_idxs].reset_index(drop=True)
 
             val_idxs, test_idxs = next(
-                inner_spliter.split(val_test_df, y=val_test_df["bin_target"], groups=val_test_df["cluster"])
+                inner_spliter.split(
+                    val_test_df,
+                    y=val_test_df["bin_target"],
+                    groups=group_col_getter(val_test_df),
+                )
             )
 
             val_df = val_test_df.loc[val_idxs].reset_index(drop=True)
@@ -130,7 +147,7 @@ def train_and_evaluate_split(
         val_mol_ds=val_mol_ds,
         val_labels=val_df["bin_target"],
         random_seed=train_config.random_seed,
-        df_classification_threshold=df_classification_threshold
+        df_classification_threshold=df_classification_threshold,
     )
 
     pred_probs, preds = model_module.predict_func(
@@ -139,7 +156,7 @@ def train_and_evaluate_split(
         train_mol_ds=train_mol_ds,
         train_labels=train_df["bin_target"],
         test_mol_ds=test_mol_ds,
-        df_classification_threshold=df_classification_threshold
+        df_classification_threshold=df_classification_threshold,
     )
 
     return calc_metrics(pred_probs, preds, test_df["bin_target"])

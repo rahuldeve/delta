@@ -5,6 +5,7 @@ from enum import StrEnum, auto
 class SplitType(StrEnum):
     RANDOM = auto()
     SCAFFOLD = auto()
+    BUTINA = auto()
 
 
 @dataclass
@@ -13,7 +14,7 @@ class TrainConfig:
     max_epochs: int = 50
     early_stopping_patience: int = 20
     n_splits: int = 5
-    split_type: SplitType = SplitType.SCAFFOLD
+    split_type: SplitType = SplitType.BUTINA
     random_seed: int = 42
 
 
