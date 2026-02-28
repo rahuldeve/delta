@@ -1,5 +1,5 @@
 import pandas as pd
-from data import GT, LT
+from data import GT, LT, DSThreshold, SupportedDatasets
 
 def load_single_target_tba():
     df = pd.read_excel("../datasets/GSK_TBA_AH_JSFedit070425.xlsx")
@@ -62,3 +62,22 @@ def load_pk():
     df["cont_target"] = df["auc"]
     df["bin_target"] = df["cont_target"] > 1000
     return df, GT(1000)
+
+
+def load_dataset(dataset: SupportedDatasets) -> tuple[pd.DataFrame, DSThreshold]:
+    if dataset == SupportedDatasets.SINGLE_TARGET_TBA:
+        df, df_classification_threshold = load_single_target_tba()
+    elif dataset == SupportedDatasets.DUAL_TARGET_TBA:
+        df, df_classification_threshold = load_dual_target_tba()
+    elif dataset == SupportedDatasets.GSK_HEPG2:
+        df, df_classification_threshold = load_gsk_hepg2()
+    elif dataset == SupportedDatasets.PK:
+        df, df_classification_threshold = load_pk()
+    elif dataset == SupportedDatasets.DB_MALARIA:
+        df, df_classification_threshold = load_derbyshire_malaria()
+    elif dataset == SupportedDatasets.DB_HEPG2:
+        df, df_classification_threshold = load_derbyshire_hepg2()
+    else:
+        raise ValueError(dataset)
+    
+    return df, df_classification_threshold
