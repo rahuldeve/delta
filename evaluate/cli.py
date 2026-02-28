@@ -3,51 +3,25 @@ import sys
 sys.path.append("..")
 
 from dataclasses import asdict
-from enum import Enum, auto
 
 import tyro
 from config import TrainConfig, WandbConfig, WandbDisabled, WandbEnabled
 
+from data import SupportedDatasets
 from models.config import BaselineConfig, DeltapropConfig
-
-
-class SupportedDatasets(Enum):
-    SINGLE_TARGET_TBA = auto()
-    DUAL_TARGET_TBA = auto()
-    GSK_HEPG2 = auto()
-    PK = auto()
-    DB_MALARIA = auto()
-    DB_HEPG2 = auto()
 
 
 def prepare_dataset(dataset: SupportedDatasets):
     # Lazy import here to prevent cli startup from being slow
     import ray
-    from data import (
-        load_dual_target_tba,
-        load_gsk_hepg2,
-        load_single_target_tba,
-        load_pk,
-        load_derbyshire_malaria,
-        load_derbyshire_hepg2
-    )
+
+    from data.loaders import load_dataset
+    from data.preprocessing import preprocess_ray
 
     ray.init(ignore_reinit_error=True, num_cpus=4, runtime_env={"working_dir": "../"})
 
-    if dataset == SupportedDatasets.SINGLE_TARGET_TBA:
-        df, df_classification_threshold = load_single_target_tba()
-    elif dataset == SupportedDatasets.DUAL_TARGET_TBA:
-        df, df_classification_threshold = load_dual_target_tba()
-    elif dataset == SupportedDatasets.GSK_HEPG2:
-        df, df_classification_threshold = load_gsk_hepg2()
-    elif dataset == SupportedDatasets.PK:
-        df, df_classification_threshold = load_pk()
-    elif dataset == SupportedDatasets.DB_MALARIA:
-        df, df_classification_threshold = load_derbyshire_malaria()
-    elif dataset == SupportedDatasets.DB_HEPG2:
-        df, df_classification_threshold = load_derbyshire_hepg2()
-    else:
-        raise ValueError(dataset)
+    df, df_classification_threshold = load_dataset(dataset)
+    df = preprocess_ray(df)
 
     ray.shutdown()
 
@@ -102,7 +76,6 @@ def deltaprop(
     wandb_cf: WandbConfig = WandbDisabled(),
 ):
     from evaluate.train import train_and_evaluate
-
     from models import deltaprop
 
     if isinstance(wandb_cf, WandbEnabled):
