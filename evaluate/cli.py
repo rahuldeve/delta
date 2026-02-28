@@ -1,12 +1,8 @@
-import sys
-
-sys.path.append("..")
-
 from dataclasses import asdict
 
 import tyro
-from config import TrainConfig, WandbConfig, WandbDisabled, WandbEnabled
 
+from config import TrainConfig, WandbConfig, WandbDisabled, WandbEnabled
 from data import SupportedDatasets
 from models.config import BaselineConfig, DeltapropConfig
 
@@ -18,7 +14,7 @@ def prepare_dataset(dataset: SupportedDatasets):
     from data.loaders import load_dataset
     from data.preprocessing import preprocess_ray
 
-    ray.init(ignore_reinit_error=True, num_cpus=4, runtime_env={"working_dir": "../"})
+    ray.init(ignore_reinit_error=True, num_cpus=4)
 
     df, df_classification_threshold = load_dataset(dataset)
     df = preprocess_ray(df)
@@ -34,8 +30,7 @@ def baseline(
     model_cf: BaselineConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
 ):
-    from train import train_and_evaluate
-
+    from evaluate.train import train_and_evaluate
     from models import baseline
 
     if isinstance(wandb_cf, WandbEnabled):

@@ -17,7 +17,7 @@ from sklearn.model_selection import (
 )
 
 from data import DSThreshold
-from evaluate.config import SplitType, TrainConfig
+from config import SplitType, TrainConfig
 from models.config import BaselineConfig, DeltapropConfig
 
 

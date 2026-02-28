@@ -2,7 +2,7 @@ import pandas as pd
 from data import GT, LT, DSThreshold, SupportedDatasets
 
 def load_single_target_tba():
-    df = pd.read_excel("../datasets/GSK_TBA_AH_JSFedit070425.xlsx")
+    df = pd.read_excel("./datasets/GSK_TBA_AH_JSFedit070425.xlsx")
     df = df.loc[:, ["smiles", "parent_remaining_24", "metabolite_detected"]]
 
     df["cont_target"] = df["parent_remaining_24"].round(1) / 100
@@ -11,7 +11,7 @@ def load_single_target_tba():
 
 
 def load_dual_target_tba():
-    df = pd.read_excel("../datasets/GSK_TBA_AH_JSFedit070425.xlsx")
+    df = pd.read_excel("./datasets/GSK_TBA_AH_JSFedit070425.xlsx")
     df = df.loc[:, ["smiles", "parent_remaining_24", "metabolite_detected"]]
 
     df["cont_target"] = (
@@ -22,7 +22,7 @@ def load_dual_target_tba():
 
 
 def load_gsk_hepg2():
-    df = pd.read_csv("../datasets/GSK_HepG2.csv")
+    df = pd.read_csv("./datasets/GSK_HepG2.csv")
     df = df.loc[:, ["SMILES", "% inhibition of HepG2 cell line: PCT_INHIB_HEPG2 (%)"]]
     df.columns = ["smiles", "per_inhibition"]
 
@@ -32,7 +32,7 @@ def load_gsk_hepg2():
 
 
 def load_derbyshire_malaria():
-    df = pd.read_csv("../datasets/Derbyshire_malaria.csv")
+    df = pd.read_csv("./datasets/Derbyshire_malaria.csv")
     cols = ["Compound SMILES", "Parasite % Control Avg"]
     df = df.loc[:, cols]
     df.columns = ["smiles", "parasite_remain_per"]
@@ -43,7 +43,7 @@ def load_derbyshire_malaria():
 
 
 def load_derbyshire_hepg2():
-    df = pd.read_csv("../datasets/Derbyshire_malaria.csv")
+    df = pd.read_csv("./datasets/Derbyshire_malaria.csv")
     cols = ["Compound SMILES", "Liver % Control Avg"]
     df = df.loc[:, cols]
     df.columns = ["smiles", "liver_remain_per"]
@@ -54,7 +54,7 @@ def load_derbyshire_hepg2():
 
 
 def load_pk():
-    df = pd.read_csv("../datasets/PK.csv")
+    df = pd.read_csv("./datasets/PK.csv")
     df = df.loc[:, ["mol", "AUC"]]
     df.columns = ["smiles", "auc"]
     df = df.dropna().reset_index(drop=True)
