@@ -14,7 +14,8 @@ from scipy.interpolate import interp1d
 from sklearn.isotonic import IsotonicRegression
 from sklearn.preprocessing import StandardScaler
 
-from data import set_seeds, DSThreshold, LT
+from data import LT, DSThreshold
+from misc import set_seeds
 from models.config import DeltapropConfig
 from models.deltaprop.data import setup_train_val_dataloaders
 from models.deltaprop.model import DeltaProp, build_model

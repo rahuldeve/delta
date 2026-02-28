@@ -22,8 +22,8 @@ from ray import tune
 from ray.tune.integration.pytorch_lightning import TuneReportCheckpointCallback
 from sklearn.preprocessing import StandardScaler
 
+from misc import set_seeds
 from models.config import BaselineConfig
-from data import set_seeds
 
 
 def get_molecule_datapoint(row):
