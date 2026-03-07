@@ -14,6 +14,7 @@ class BaselineConfig:
     ffn_n_layers: int = 2
     ffn_dropout: float = 0.1
     batch_norm: bool = False
+    use_chameleon_mp: bool = False
 
 
 @dataclass
@@ -28,3 +29,4 @@ class DeltapropConfig:
     batch_norm: bool = False
     interaction_dropout: float = 0.0
     candidate_size: int = 16
+    use_chameleon_mp: bool = False

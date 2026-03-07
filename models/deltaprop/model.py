@@ -6,7 +6,7 @@ from typing import Self
 import torch
 from chemprop.conf import DEFAULT_HIDDEN_DIM
 from chemprop.data import BatchMolGraph, TrainingBatch
-from chemprop.nn import Aggregation, BondMessagePassing, NormAggregation, MessagePassing
+from chemprop.nn import Aggregation, BondMessagePassing, MessagePassing, NormAggregation
 from chemprop.nn.ffn import MLP
 from chemprop.nn.transforms import ScaleTransform
 from chemprop.schedulers import build_NoamLike_LRSched
@@ -368,11 +368,17 @@ def build_model(
         X_d_transform = None
         num_mol_feats = 0
 
-    mp = BondMessagePassing(
-        d_h=config.mp_d_h,
-        depth=config.mp_depth,
-        dropout=config.mp_dropout,
-    )  # type: ignore
+    if config.use_chameleon_mp:
+        chemeleon_mp = torch.load("./chemeleon_mp.pt", weights_only=True)
+        mp = BondMessagePassing(**chemeleon_mp["hyper_parameters"])  # type: ignore
+        mp.load_state_dict(chemeleon_mp["state_dict"])
+    else:
+        mp = BondMessagePassing(
+            d_h=config.mp_d_h,
+            depth=config.mp_depth,
+            dropout=config.mp_dropout,
+        )  # type: ignore
+
     agg = NormAggregation()
     ffn_dims = mp.output_dim + num_mol_feats
     encoder = Encoder(
