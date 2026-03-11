@@ -91,7 +91,7 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
         rl_loss = self.loss_fn(rl_interaction, rl_labels.float())
 
         delta = (lr_interaction.sigmoid() + rl_interaction.sigmoid() - 1.0) ** 2
-        symm_loss = delta.sum(dim=-1).mean()
+        symm_loss = delta.mean(dim=-1).mean()
 
         return symm_loss, lr_loss, rl_loss
 
