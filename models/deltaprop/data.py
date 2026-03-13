@@ -111,7 +111,7 @@ def setup_train_val_dataloaders(
         train_mol_ds, train_mol_ds, binary_threshold, candidate_size
     )
     val_pair_ds = RandomPairDataset(
-        train_mol_ds, val_mol_ds, binary_threshold, candidate_size
+        val_mol_ds, train_mol_ds , binary_threshold, candidate_size
     )
 
     train_pair_dl = DataLoader(
