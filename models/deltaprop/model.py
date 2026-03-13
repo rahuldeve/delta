@@ -61,14 +61,27 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
         self.save_hyperparameters()
         self.hparams["cls"] = self.__class__
 
-        self.interaction_matrix = torch.nn.Linear(ndims, ndims, bias=False)
+        self.head_mat = torch.nn.Sequential(*[
+            torch.nn.Linear(ndims, ndims),
+            torch.nn.SELU(),
+            torch.nn.Linear(ndims, ndims),
+        ])
+
+        self.tail_mat = torch.nn.Sequential(*[
+            torch.nn.Linear(ndims, ndims),
+            torch.nn.SELU(),
+            torch.nn.Linear(ndims, ndims),
+        ])
         self.interaction_dropout = torch.nn.Dropout(dropout)
 
         self.loss_fn = nn.BCEWithLogitsLoss()
 
     def forward(self, head_emb: Tensor, tail_emb: Tensor):
-        R = self.interaction_matrix.weight.unsqueeze(0)
-        Z = self.interaction_dropout(head_emb @ R) @ tail_emb.transpose(-2, -1)
+        # R = self.interaction_matrix.weight.unsqueeze(0)
+        head_emb = self.head_mat(head_emb)
+        tail_emb = self.tail_mat(tail_emb)
+
+        Z = self.interaction_dropout(head_emb) @ tail_emb.transpose(-2, -1)
         return Z.squeeze()
 
     def bidirectional_interaction_loss(
