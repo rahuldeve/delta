@@ -15,7 +15,7 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.preprocessing import StandardScaler
 
 from data import LT, DSThreshold
-from misc import set_seeds
+from misc import set_seeds, tanimoto_similarity_matrix
 from models.config import DeltapropConfig
 from models.deltaprop.data import setup_train_val_dataloaders
 from models.deltaprop.model import DeltaProp, build_model
@@ -198,19 +198,25 @@ def predict_func(
 
     pos_mask = train_labels
     neg_mask = ~pos_mask
-    
-    pos_contrib = pred_probs[:, pos_mask]
-    neg_contrib = pred_probs[:, neg_mask]
-    if pos_contrib.shape[-1] == 0:
-        pred_probs = neg_contrib.mean(axis=-1)
 
-    elif neg_contrib.shape[-1] == 0:
-        pred_probs = pos_contrib.mean(axis=-1)
+    sims = tanimoto_similarity_matrix(test_mol_ds.mols, train_mol_ds.mols)
+    sims_topk = np.argsort(sims, axis=-1)[:, ::-1][:, :10]
 
-    else:
-        pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
-        neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
-        pred_probs = (pos_contrib + neg_contrib) / 2
+    sims_topk_mask = np.zeros_like(sims, dtype=np.bool)
+    np.put_along_axis(sims_topk_mask, sims_topk, True, axis=-1)
+
+    pos_contrib_mask = pos_mask & sims_topk_mask
+    neg_contrib_mask = neg_mask & sims_topk_mask
+    pos_contrib = (pred_probs * pos_contrib_mask).sum(axis=-1) / (
+        pos_contrib_mask.sum(axis=-1) + 1e-12
+    )
+    neg_contrib = (pred_probs * neg_contrib_mask).sum(axis=-1) / (
+        neg_contrib_mask.sum(axis=-1) + 1e-12
+    )
+
+    pos_prob = np.nan_to_num(pos_contrib)
+    neg_prob = np.nan_to_num(neg_contrib)
+    pred_probs = (pos_prob + neg_prob) / 2
 
     preds = (pred_probs >= binary_classification_threshold).astype(float)
 
@@ -248,18 +254,24 @@ def tune_binary_classification_threshold(
     pos_mask = train_labels
     neg_mask = ~pos_mask
 
-    pos_contrib = pred_probs[:, pos_mask]
-    neg_contrib = pred_probs[:, neg_mask]
-    if pos_contrib.shape[-1] == 0:
-        pred_probs = neg_contrib.mean(axis=-1)
+    sims = tanimoto_similarity_matrix(val_mol_ds.mols, train_mol_ds.mols)
+    sims_topk = np.argsort(sims, axis=-1)[:, ::-1][:, :10]
 
-    elif neg_contrib.shape[-1] == 0:
-        pred_probs = pos_contrib.mean(axis=-1)
+    sims_topk_mask = np.zeros_like(sims, dtype=np.bool)
+    np.put_along_axis(sims_topk_mask, sims_topk, True, axis=-1)
 
-    else:
-        pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
-        neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
-        pred_probs = (pos_contrib + neg_contrib) / 2
+    pos_contrib_mask = pos_mask & sims_topk_mask
+    neg_contrib_mask = neg_mask & sims_topk_mask
+    pos_contrib = (pred_probs * pos_contrib_mask).sum(axis=-1) / (
+        pos_contrib_mask.sum(axis=-1) + 1e-12
+    )
+    neg_contrib = (pred_probs * neg_contrib_mask).sum(axis=-1) / (
+        neg_contrib_mask.sum(axis=-1) + 1e-12
+    )
+
+    pos_prob = np.nan_to_num(pos_contrib)
+    neg_prob = np.nan_to_num(neg_contrib)
+    pred_probs = (pos_prob + neg_prob) / 2
 
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
     optimal_threshold = optimize_threshold_from_predictions(

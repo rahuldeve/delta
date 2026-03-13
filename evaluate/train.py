@@ -143,9 +143,9 @@ def train_and_evaluate_split(
     clf_th = model_module.tune_binary_classification_threshold(
         model=model,
         train_mol_ds=train_mol_ds,
-        train_labels=train_df["bin_target"],
+        train_labels=train_df["bin_target"].to_numpy(),
         val_mol_ds=val_mol_ds,
-        val_labels=val_df["bin_target"],
+        val_labels=val_df["bin_target"].to_numpy(),
         random_seed=train_config.random_seed,
         df_classification_threshold=df_classification_threshold,
     )
@@ -154,7 +154,7 @@ def train_and_evaluate_split(
         model=model,
         binary_classification_threshold=clf_th,
         train_mol_ds=train_mol_ds,
-        train_labels=train_df["bin_target"],
+        train_labels=train_df["bin_target"].to_numpy(),
         test_mol_ds=test_mol_ds,
         df_classification_threshold=df_classification_threshold,
     )
