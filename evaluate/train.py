@@ -1,4 +1,5 @@
-import chemprop as cp
+from typing import Type
+
 import numpy as np
 from sklearn.metrics import (
     accuracy_score,
@@ -16,9 +17,10 @@ from sklearn.model_selection import (
     StratifiedShuffleSplit,
 )
 
-from data import DSThreshold
 from config import SplitType, TrainConfig
-from models.config import BaselineConfig, DeltapropConfig
+from data import DSThreshold
+from models.abc import RefModel
+from models.config import ModelConfig
 
 
 def get_group_splitters(random_state, n_outer):
@@ -81,27 +83,6 @@ def generate_repeated_5xn_splits(df, n: int, split_type: SplitType, random_state
             yield (outer_idx, inner_idx), (train_df, val_df, test_df)
 
 
-def prepare_mol_datasets(train_df, val_df, test_df, model_module):
-    train_df["mol_dp"] = train_df.apply(model_module.get_molecule_datapoint, axis=1)
-    val_df["mol_dp"] = val_df.apply(model_module.get_molecule_datapoint, axis=1)
-    test_df["mol_dp"] = test_df.apply(model_module.get_molecule_datapoint, axis=1)
-
-    featurizer = cp.featurizers.SimpleMoleculeMolGraphFeaturizer()
-    train_mol_dataset = cp.data.MoleculeDataset(
-        train_df["mol_dp"], featurizer=featurizer
-    )
-    val_mol_dataset = cp.data.MoleculeDataset(val_df["mol_dp"], featurizer=featurizer)
-    test_mol_dataset = cp.data.MoleculeDataset(test_df["mol_dp"], featurizer=featurizer)
-
-    x_d_scaler = train_mol_dataset.normalize_inputs("X_d")
-    val_mol_dataset.normalize_inputs("X_d", x_d_scaler)
-
-    train_mol_dataset.cache = True
-    val_mol_dataset.cache = True
-
-    return train_mol_dataset, val_mol_dataset, test_mol_dataset, x_d_scaler
-
-
 def calc_metrics(pred_probs, preds, labels):
     return {
         "accuracy": accuracy_score(labels, preds),
@@ -120,42 +101,38 @@ def train_and_evaluate_split(
     val_df,
     test_df,
     df_classification_threshold: DSThreshold,
-    model_module,
-    model_config: DeltapropConfig | BaselineConfig,
+    model_class: Type[RefModel],
+    model_config: ModelConfig,
     train_config: TrainConfig,
 ):
-    train_mol_ds, val_mol_ds, test_mol_ds, X_d_scaler = prepare_mol_datasets(
-        train_df, val_df, test_df, model_module
+    train_split, val_split, test_split, extras = model_class.prepare_splits(
+        train_df=train_df, val_df=val_df, test_df=test_df
     )
 
-    model = model_module.train_func(
-        config=model_config,
-        train_mol_ds=train_mol_ds,
-        val_mol_ds=val_mol_ds,
-        X_d_scaler=X_d_scaler,
-        binary_threshold=df_classification_threshold,
-        batch_size=train_config.batch_size,
-        max_epochs=train_config.max_epochs,
-        early_stopping_patience=train_config.early_stopping_patience,
-        random_seed=train_config.random_seed,
-    )
+    model = model_class.build(model_config=model_config, **extras)
 
-    clf_th = model_module.tune_binary_classification_threshold(
-        model=model,
-        train_mol_ds=train_mol_ds,
-        train_labels=train_df["bin_target"],
-        val_mol_ds=val_mol_ds,
-        val_labels=val_df["bin_target"],
-        random_seed=train_config.random_seed,
+    model = model.train_func(
+        train_split=train_split,
+        val_split=val_split,
+        train_config=train_config,
+        model_config=model_config,
         df_classification_threshold=df_classification_threshold,
     )
 
-    pred_probs, preds = model_module.predict_func(
-        model=model,
-        binary_classification_threshold=clf_th,
-        train_mol_ds=train_mol_ds,
+    clf_th = model.tune_binary_classification_threshold(
+        val_split=val_split,
+        val_labels=val_df["bin_target"],
+        train_config=train_config,
+        train_split=train_split,
         train_labels=train_df["bin_target"],
-        test_mol_ds=test_mol_ds,
+        df_classification_threshold=df_classification_threshold,
+    )
+
+    pred_probs, preds = model.predict_func(
+        binary_classification_threshold=clf_th,
+        train_split=train_split,
+        train_labels=train_df["bin_target"],
+        test_split=test_split,
         df_classification_threshold=df_classification_threshold,
     )
 
@@ -165,8 +142,8 @@ def train_and_evaluate_split(
 def train_and_evaluate(
     df,
     df_classification_threshold: DSThreshold,
-    model_module,
-    model_config: DeltapropConfig | BaselineConfig,
+    model_class: Type[RefModel],
+    model_config: ModelConfig,
     train_config: TrainConfig,
 ):
     splits = generate_repeated_5xn_splits(
@@ -184,7 +161,7 @@ def train_and_evaluate(
             val_df=val_df,
             test_df=test_df,
             df_classification_threshold=df_classification_threshold,
-            model_module=model_module,
+            model_class=model_class,
             model_config=model_config,
             train_config=train_config,
         )
