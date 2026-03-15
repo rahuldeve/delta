@@ -85,7 +85,7 @@ def getMolDescriptors(mol):
             except Exception:
                 val = None
 
-        res[nm] = val
+        res[f"feat_{nm}"] = val
     return res
 
 
@@ -95,7 +95,7 @@ def preprocess_row(row):
 
     if mol is None:
         return dict(inchi=None, scaffold=None) | {
-            name: None for name, _ in Descriptors.descList
+            f"feat_{name}": None for name, _ in Descriptors.descList
         }
 
     return dict(
