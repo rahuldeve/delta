@@ -31,7 +31,7 @@ def baseline(
     wandb_cf: WandbConfig = WandbDisabled(),
 ):
     from evaluate.train import train_and_evaluate
-    from models import baseline
+    from models.baseline import ChempropRef
 
     if isinstance(wandb_cf, WandbEnabled):
         import wandb
@@ -45,7 +45,7 @@ def baseline(
     result_iter = train_and_evaluate(
         df=df,
         df_classification_threshold=df_classification_threshold,
-        model_module=baseline,
+        model_class=ChempropRef,
         model_config=model_cf,
         train_config=train_cf,
     )
@@ -71,7 +71,7 @@ def deltaprop(
     wandb_cf: WandbConfig = WandbDisabled(),
 ):
     from evaluate.train import train_and_evaluate
-    from models import deltaprop
+    from models.deltaprop import DeltapropRef
 
     if isinstance(wandb_cf, WandbEnabled):
         import wandb
@@ -85,7 +85,7 @@ def deltaprop(
     result_iter = train_and_evaluate(
         df=df,
         df_classification_threshold=df_classification_threshold,
-        model_module=deltaprop,
+        model_class=DeltapropRef,
         model_config=model_cf,
         train_config=train_cf,
     )

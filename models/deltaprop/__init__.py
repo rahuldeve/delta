@@ -1,24 +1,31 @@
+import random
+from typing import Self
+
 import lightning as L
 import numpy as np
 import pandas as pd
 import torch
 from chemprop.data import MoleculeDatapoint, MoleculeDataset
 from chemprop.data.dataloader import collate_batch
+from chemprop.featurizers import SimpleMoleculeMolGraphFeaturizer
+from chemprop.nn import (
+    BondMessagePassing,
+    NormAggregation,
+    ScaleTransform,
+)
 from ghostml import optimize_threshold_from_predictions
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.utilities import move_data_to_device
-from ray import tune
-from ray.tune.integration.pytorch_lightning import TuneReportCheckpointCallback
-from scipy.interpolate import interp1d
-from sklearn.isotonic import IsotonicRegression
 from sklearn.preprocessing import StandardScaler
 
-from data import LT, DSThreshold
+from config import TrainConfig
 from misc import set_seeds
+from models.abc import PreparedDatasetSplit, RefModel
 from models.config import DeltapropConfig
+from models.deltaprop.model import DeltaProp, Encoder, Interaction
 from models.deltaprop.data import setup_train_val_dataloaders
-from models.deltaprop.model import DeltaProp, build_model
+from data import LT, DSThreshold
 
 
 def get_molecule_datapoint(row):
@@ -33,100 +40,12 @@ def get_molecule_datapoint(row):
     )
 
 
-def train_func(
-    config: DeltapropConfig,
-    train_mol_ds: MoleculeDataset,
-    val_mol_ds: MoleculeDataset,
-    binary_threshold: DSThreshold,
-    batch_size: int,
-    random_seed: int,
-    X_d_scaler: StandardScaler | None,
-    max_epochs: int = 20,
-    early_stopping_patience: int = 10,
-):
-    set_seeds(random_seed)
-    train_dl, val_dl = setup_train_val_dataloaders(
-        train_mol_ds, val_mol_ds, binary_threshold, batch_size, config.candidate_size
-    )
 
-    model = build_model(config, X_d_scaler)
-
-    trainer = L.Trainer(
-        logger=None,
-        enable_checkpointing=True,
-        enable_progress_bar=True,
-        accelerator="auto",
-        devices=1,
-        max_epochs=max_epochs,
-        num_sanity_val_steps=0,
-        callbacks=[
-            EarlyStopping(
-                monitor="val_loss",
-                mode="min",
-                verbose=True,
-                patience=early_stopping_patience,
-            ),
-            ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1),
-        ],
-    )
-
-    trainer.fit(model, train_dataloaders=train_dl, val_dataloaders=val_dl)
-    model = DeltaProp.load_from_checkpoint(
-        trainer.checkpoint_callback.best_model_path,  # type: ignore
-        weights_only=False,
-    )
-    return model
-
-
-search_space = {
-    "depth": tune.qrandint(lower=2, upper=6, q=1),
-    "ffn_hidden_dim": tune.qrandint(lower=300, upper=2400, q=100),
-    "ffn_num_layers": tune.qrandint(lower=1, upper=3, q=1),
-    "message_hidden_dim": tune.qrandint(lower=300, upper=2400, q=100),
-    "encoder_dropout": tune.uniform(lower=0.0, upper=0.3),
-    "interaction_dropout": tune.uniform(lower=0.0, upper=0.3),
-    "batch_norm": tune.choice([True, False]),
-    "candidate_size": 8,
-}
-
-
-def tune_func(
-    config,
-    train_mol_ds: MoleculeDataset,
-    val_mol_ds: MoleculeDataset,
-    binary_threshold: DSThreshold,
-    batch_size: int,
-    random_seed: int,
-    X_d_scaler: StandardScaler | None,
-    max_epochs: int = 20,
-    early_stopping_patience: int = 10,
-):
-    set_seeds(random_seed)
-    train_dl, val_dl = setup_train_val_dataloaders(
-        train_mol_ds, val_mol_ds, binary_threshold, batch_size, config["candidate_size"]
-    )
-
-    model = build_model(config, X_d_scaler)
-
-    trainer = L.Trainer(
-        logger=None,
-        enable_checkpointing=False,
-        enable_progress_bar=False,
-        accelerator="auto",
-        devices=1,
-        max_epochs=max_epochs,
-        callbacks=[
-            EarlyStopping(
-                monitor="val_loss",
-                mode="min",
-                verbose=False,
-                patience=early_stopping_patience,
-            ),
-            TuneReportCheckpointCallback(save_checkpoints=False),
-        ],
-    )
-
-    trainer.fit(model, train_dataloaders=train_dl, val_dataloaders=val_dl)
+# ref: https://docs.pytorch.org/docs/stable/notes/randomness.html
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 
 @torch.no_grad()
@@ -151,122 +70,246 @@ def embed_all(mol_dataset: MoleculeDataset, model: DeltaProp, scale_X_d: bool = 
     return all_embeds
 
 
-def get_prob(vals, tail_probs, binary_threshold):
-    sort_idxs = np.argsort(vals)
-    X = vals[sort_idxs]
-    Y = tail_probs[sort_idxs]
-    reg = IsotonicRegression(increasing=False, y_min=0, y_max=1.0)
-    adj_Y = reg.fit_transform(X, Y)
-    f = interp1d(X, adj_Y, kind="linear")
-    return f(binary_threshold)
+class DeltapropRef(RefModel[DeltapropConfig]):
+    def __init__(self, model: DeltaProp) -> None:
+        self.model = model
 
+    @staticmethod
+    def prepare_splits(*, train_df, val_df, test_df):
+        train_df["mol_dp"] = train_df.apply(get_molecule_datapoint, axis=1)
+        val_df["mol_dp"] = val_df.apply(get_molecule_datapoint, axis=1)
+        test_df["mol_dp"] = test_df.apply(get_molecule_datapoint, axis=1)
 
-def get_interpolate_prob(pred_prob, exemplar_vals, binary_threshold):
-    probs = []
-    for idx in range(pred_prob.shape[0]):
-        probs.append(get_prob(exemplar_vals, pred_prob[idx], binary_threshold))
-
-    return np.array(probs)
-
-
-def predict_func(
-    model: DeltaProp,
-    binary_classification_threshold: float,
-    df_classification_threshold: DSThreshold,
-    train_mol_ds: MoleculeDataset,
-    train_labels: np.typing.NDArray[np.bool],
-    test_mol_ds: MoleculeDataset,
-):
-    model.eval()
-
-    train_embeds = embed_all(train_mol_ds, model)
-    test_embeds = embed_all(test_mol_ds, model, scale_X_d=True)
-
-    with torch.no_grad():
-        pred_probs = (
-            model.interaction(test_embeds, train_embeds)
-            .sigmoid()
-            .squeeze()
-            .cpu()
-            .numpy()
+        featurizer = SimpleMoleculeMolGraphFeaturizer()
+        train_mol_dataset = MoleculeDataset(
+            train_df["mol_dp"].tolist(), featurizer=featurizer
+        )
+        val_mol_dataset = MoleculeDataset(
+            val_df["mol_dp"].tolist(), featurizer=featurizer
+        )
+        test_mol_dataset = MoleculeDataset(
+            test_df["mol_dp"].tolist(), featurizer=featurizer
         )
 
-    if isinstance(df_classification_threshold, LT):
-        # by default, pred_probs[i, j] contains prob(i > j)
-        # doing 1 - pred_probs will give us prob (i <= j)
-        pred_probs = 1 - pred_probs
+        X_d_scaler = train_mol_dataset.normalize_inputs("X_d")
+        val_mol_dataset.normalize_inputs("X_d", X_d_scaler)
 
-    pos_mask = train_labels
-    neg_mask = ~pos_mask
+        train_mol_dataset.cache = True
+        val_mol_dataset.cache = True
+
+        return PreparedDatasetSplit(
+            train_split=train_mol_dataset,
+            val_split=val_mol_dataset,
+            test_split=test_mol_dataset,
+            extras=dict(X_d_scaler=X_d_scaler),
+        )
     
-    pos_contrib = pred_probs[:, pos_mask]
-    neg_contrib = pred_probs[:, neg_mask]
-    if pos_contrib.shape[-1] == 0:
-        pred_probs = neg_contrib.mean(axis=-1)
 
-    elif neg_contrib.shape[-1] == 0:
-        pred_probs = pos_contrib.mean(axis=-1)
+    @classmethod
+    def build(
+        cls,
+        *,
+        model_config: DeltapropConfig,
+        X_d_scaler: StandardScaler | None,
+        **kwargs,
+    ) -> "DeltapropRef":
+        
+        if X_d_scaler is not None:
+            X_d_transform = ScaleTransform.from_standard_scaler(X_d_scaler)
+            num_mol_feats = X_d_scaler.n_features_in_
+        else:
+            X_d_transform = None
+            num_mol_feats = 0
 
-    else:
-        pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
-        neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
-        pred_probs = (pos_contrib + neg_contrib) / 2
+        if model_config.use_chameleon_mp:
+            chemeleon_mp = torch.load("./chemeleon_mp.pt", weights_only=True)
+            mp = BondMessagePassing(**chemeleon_mp["hyper_parameters"])  # type: ignore
+            mp.load_state_dict(chemeleon_mp["state_dict"])
+        else:
+            mp = BondMessagePassing(
+                d_h=model_config.mp_d_h,
+                depth=model_config.mp_depth,
+                dropout=model_config.mp_dropout,
+            )  # type: ignore
 
-    preds = (pred_probs >= binary_classification_threshold).astype(float)
+        agg = NormAggregation()
+        ffn_dims = mp.output_dim + num_mol_feats
+        encoder = Encoder(
+            input_dim=ffn_dims,
+            hidden_dim=model_config.encoder_hidden_dim,
+            output_dim=model_config.encoder_output_dim,
+            activation=torch.nn.PReLU(),
+        )
+        interaction = Interaction(encoder.output_dim, dropout=model_config.interaction_dropout)
 
-    return pred_probs, preds
-
-
-def tune_binary_classification_threshold(
-    model: DeltaProp,
-    train_mol_ds: MoleculeDataset,
-    train_labels: np.typing.NDArray[np.bool],
-    val_mol_ds: MoleculeDataset,
-    val_labels,
-    random_seed: int,
-    df_classification_threshold: DSThreshold,
-):
-    model.eval()
-
-    train_embeds = embed_all(train_mol_ds, model)
-    val_embeds = embed_all(val_mol_ds, model)
-
-    with torch.no_grad():
-        pred_probs = (
-            model.interaction(val_embeds, train_embeds)
-            .sigmoid()
-            .squeeze()
-            .cpu()
-            .numpy()
+        X_d_transform = (
+            ScaleTransform.from_standard_scaler(X_d_scaler)
+            if X_d_scaler is not None
+            else None
+        )
+        model = DeltaProp(
+            mp,
+            agg,
+            encoder,
+            interaction,
+            X_d_transform=X_d_transform,
+            batch_norm=model_config.batch_norm,
         )
 
-    if isinstance(df_classification_threshold, LT):
-        # by default, pred_probs[i, j] contains prob(i > j)
-        # doing 1 - pred_probs will give us prob (i <= j)
-        pred_probs = 1 - pred_probs
+        return DeltapropRef(model)
+    
+    def train_func(
+        self,
+        *,
+        train_split: MoleculeDataset,
+        val_split: MoleculeDataset,
+        train_config: TrainConfig,
+        df_classification_threshold: DSThreshold,
+        model_config: DeltapropConfig,
+        **kwargs,
+    ) -> Self:
+        
+        set_seeds(train_config.random_seed)
+        train_dl, val_dl = setup_train_val_dataloaders(
+            train_mol_ds=train_split, 
+            val_mol_ds=val_split, 
+            binary_threshold=df_classification_threshold, 
+            batch_size=train_config.batch_size, 
+            candidate_size=model_config.candidate_size
+        )
 
-    pos_mask = train_labels
-    neg_mask = ~pos_mask
+        trainer = L.Trainer(
+            logger=None,
+            enable_checkpointing=True,
+            enable_progress_bar=True,
+            accelerator="auto",
+            devices=1,
+            max_epochs=train_config.max_epochs,
+            num_sanity_val_steps=0,
+            callbacks=[
+                EarlyStopping(
+                    monitor="val_loss",
+                    mode="min",
+                    verbose=True,
+                    patience=train_config.early_stopping_patience,
+                ),
+                ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1),
+            ],
+        )
 
-    pos_contrib = pred_probs[:, pos_mask]
-    neg_contrib = pred_probs[:, neg_mask]
-    if pos_contrib.shape[-1] == 0:
-        pred_probs = neg_contrib.mean(axis=-1)
+        trainer.fit(self.model, train_dataloaders=train_dl, val_dataloaders=val_dl)
+        self.model = DeltaProp.load_from_checkpoint(
+            trainer.checkpoint_callback.best_model_path,  # type: ignore
+            weights_only=False,
+        )
+        return self
+    
 
-    elif neg_contrib.shape[-1] == 0:
-        pred_probs = pos_contrib.mean(axis=-1)
+    def tune_binary_classification_threshold(
+        self,
+        *,
+        train_split: MoleculeDataset,
+        train_labels: np.typing.NDArray[np.bool],
+        val_split: MoleculeDataset,
+        val_labels: np.typing.NDArray[np.bool],
+        df_classification_threshold: DSThreshold,
+        train_config: TrainConfig,
+        **kwargs,
+    ) -> float:
+        
+        model = self.model
+        model.eval()
 
-    else:
-        pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
-        neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
-        pred_probs = (pos_contrib + neg_contrib) / 2
+        train_embeds = embed_all(train_split, model)
+        val_embeds = embed_all(val_split, model)
 
-    thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
-    optimal_threshold = optimize_threshold_from_predictions(
-        labels=val_labels,
-        probs=pred_probs,
-        thresholds=thresholds,
-        random_seed=random_seed,
-    )
+        with torch.no_grad():
+            pred_probs = (
+                model.interaction(val_embeds, train_embeds)
+                .sigmoid()
+                .squeeze()
+                .cpu()
+                .numpy()
+            )
 
-    return optimal_threshold
+        if isinstance(df_classification_threshold, LT):
+            # by default, pred_probs[i, j] contains prob(i > j)
+            # doing 1 - pred_probs will give us prob (i <= j)
+            pred_probs = 1 - pred_probs
+
+        pos_mask = train_labels
+        neg_mask = ~pos_mask
+
+        pos_contrib = pred_probs[:, pos_mask]
+        neg_contrib = pred_probs[:, neg_mask]
+        if pos_contrib.shape[-1] == 0:
+            pred_probs = neg_contrib.mean(axis=-1)
+
+        elif neg_contrib.shape[-1] == 0:
+            pred_probs = pos_contrib.mean(axis=-1)
+
+        else:
+            pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
+            neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
+            pred_probs = (pos_contrib + neg_contrib) / 2
+
+        thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
+        optimal_threshold = optimize_threshold_from_predictions(
+            labels=val_labels,
+            probs=pred_probs,
+            thresholds=thresholds,
+            random_seed=train_config.random_seed,
+        )
+
+        return optimal_threshold
+    
+
+    def predict_func(
+        self,
+        *,
+        binary_classification_threshold: float,
+        df_classification_threshold: DSThreshold,
+        train_split: MoleculeDataset,
+        train_labels: np.typing.NDArray[np.bool],
+        test_split: MoleculeDataset,
+        **kwargs
+    ):
+        model = self.model
+        model.eval()
+
+        train_embeds = embed_all(train_split, model)
+        test_embeds = embed_all(test_split, model, scale_X_d=True)
+
+        with torch.no_grad():
+            pred_probs = (
+                model.interaction(test_embeds, train_embeds)
+                .sigmoid()
+                .squeeze()
+                .cpu()
+                .numpy()
+            )
+
+        if isinstance(df_classification_threshold, LT):
+            # by default, pred_probs[i, j] contains prob(i > j)
+            # doing 1 - pred_probs will give us prob (i <= j)
+            pred_probs = 1 - pred_probs
+
+        pos_mask = train_labels
+        neg_mask = ~pos_mask
+        
+        pos_contrib = pred_probs[:, pos_mask]
+        neg_contrib = pred_probs[:, neg_mask]
+        if pos_contrib.shape[-1] == 0:
+            pred_probs = neg_contrib.mean(axis=-1)
+
+        elif neg_contrib.shape[-1] == 0:
+            pred_probs = pos_contrib.mean(axis=-1)
+
+        else:
+            pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
+            neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
+            pred_probs = (pos_contrib + neg_contrib) / 2
+
+        preds = (pred_probs >= binary_classification_threshold).astype(float)
+
+        return pred_probs, preds

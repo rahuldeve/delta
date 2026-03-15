@@ -2,11 +2,13 @@ from dataclasses import dataclass
 
 import tyro
 
+from models.abc import ModelConfig
+
 Group = tyro.conf.create_mutex_group(required=False, title="something")
 
 
 @dataclass
-class BaselineConfig:
+class BaselineConfig(ModelConfig):
     mp_d_h: int = 300
     mp_depth: int = 3
     mp_dropout: float = 0.0
@@ -18,7 +20,7 @@ class BaselineConfig:
 
 
 @dataclass
-class DeltapropConfig:
+class DeltapropConfig(ModelConfig):
     mp_d_h: int = 300
     mp_depth: int = 3
     mp_dropout: float = 0.0
