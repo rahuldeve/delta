@@ -133,7 +133,7 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             )  # type: ignore
 
         agg = NormAggregation()
-        ffn_dims = mp.output_dim + num_mol_feats
+        ffn_dims = num_mol_feats
         encoder = Encoder(
             input_dim=ffn_dims,
             hidden_dim=model_config.encoder_hidden_dim,

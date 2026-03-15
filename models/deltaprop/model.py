@@ -6,16 +6,14 @@ from typing import Self
 import torch
 from chemprop.conf import DEFAULT_HIDDEN_DIM
 from chemprop.data import BatchMolGraph, TrainingBatch
-from chemprop.nn import Aggregation, BondMessagePassing, MessagePassing, NormAggregation
+from chemprop.nn import Aggregation, MessagePassing
 from chemprop.nn.ffn import MLP
 from chemprop.nn.transforms import ScaleTransform
 from chemprop.schedulers import build_NoamLike_LRSched
 from lightning import pytorch as pl
 from lightning.pytorch.core.mixins.hparams_mixin import HyperparametersMixin
-from sklearn.preprocessing import StandardScaler
 from torch import Tensor, nn, optim
 
-from models.config import DeltapropConfig
 from models.deltaprop.data import RandomPairTrainBatch
 
 logger = logging.getLogger(__name__)
@@ -151,7 +149,9 @@ class DeltaProp(pl.LightningModule):
             X_d_transform if X_d_transform is not None else nn.Identity()
         )
 
-        self.ln = nn.LayerNorm(self.encoder.input_dim)
+        self.ln = nn.LayerNorm(self.encoder.output_dim)
+        self.alpha = 1e-3
+        self.gate_linear = nn.Linear(self.encoder.output_dim, self.encoder.output_dim)
 
         self.warmup_epochs = warmup_epochs
         self.init_lr = init_lr
@@ -159,14 +159,15 @@ class DeltaProp(pl.LightningModule):
         self.final_lr = final_lr
 
         self.loss_fn = nn.BCEWithLogitsLoss()
+        
 
-    def fingerprint(
-        self, bmg: BatchMolGraph, V_d: Tensor | None = None, X_d: Tensor | None = None
-    ) -> Tensor:
-        H_v = self.message_passing(bmg, V_d)
-        H = self.agg(H_v, bmg.batch)
-        H = self.bn(H)
-        return H if X_d is None else torch.cat((H, self.X_d_transform(X_d)), dim=1)
+    # def fingerprint(
+    #     self, bmg: BatchMolGraph, V_d: Tensor | None = None, X_d: Tensor | None = None
+    # ) -> Tensor:
+    #     H_v = self.message_passing(bmg, V_d)
+    #     H = self.agg(H_v, bmg.batch)
+    #     H = self.bn(H)
+    #     return H if X_d is None else torch.cat((H, self.X_d_transform(X_d)), dim=1)
 
     def encoding(
         self, bmg: BatchMolGraph, V_d: Tensor | None = None, X_d: Tensor | None = None
@@ -175,14 +176,19 @@ class DeltaProp(pl.LightningModule):
         H = self.agg(H_v, bmg.batch)
         H = self.bn(H)
 
-        Z = self.encoder(
-            H
-            if X_d is None
-            else self.ln(torch.cat((H, self.X_d_transform(X_d)), dim=1))
+        if X_d is None:
+            return H
+        
+
+        Z = self.encoder(self.X_d_transform(X_d))
+        gate = torch.sigmoid(
+            self.gate_linear(H.detach())              # [N, d], values in (0, 1)
         )
 
-        Z = Z if X_d is None else Z + H
-        return Z
+        H = H + self.alpha * torch.clamp(self.ln(gate * Z), -1, 1)
+        # H = H + self.alpha * torch.clamp(self.ln(Z), -1, 1)
+        
+        return H
 
     def embed_simple_batch(self, batch: TrainingBatch):
         bmg, V_d, X_d, target, _, _, _ = batch
@@ -369,51 +375,3 @@ class DeltaProp(pl.LightningModule):
         model.load_state_dict(state_dict, strict=strict)
 
         return model
-
-
-def build_model(
-    config: DeltapropConfig, X_d_scaler: StandardScaler | None
-) -> DeltaProp:
-    if X_d_scaler is not None:
-        X_d_transform = ScaleTransform.from_standard_scaler(X_d_scaler)
-        num_mol_feats = X_d_scaler.n_features_in_
-    else:
-        X_d_transform = None
-        num_mol_feats = 0
-
-    if config.use_chameleon_mp:
-        chemeleon_mp = torch.load("./chemeleon_mp.pt", weights_only=True)
-        mp = BondMessagePassing(**chemeleon_mp["hyper_parameters"])  # type: ignore
-        mp.load_state_dict(chemeleon_mp["state_dict"])
-    else:
-        mp = BondMessagePassing(
-            d_h=config.mp_d_h,
-            depth=config.mp_depth,
-            dropout=config.mp_dropout,
-        )  # type: ignore
-
-    agg = NormAggregation()
-    ffn_dims = mp.output_dim + num_mol_feats
-    encoder = Encoder(
-        input_dim=ffn_dims,
-        hidden_dim=config.encoder_hidden_dim,
-        output_dim=config.encoder_output_dim,
-        activation=torch.nn.PReLU(),
-    )
-    interaction = Interaction(encoder.output_dim, dropout=config.interaction_dropout)
-
-    X_d_transform = (
-        ScaleTransform.from_standard_scaler(X_d_scaler)
-        if X_d_scaler is not None
-        else None
-    )
-    model = DeltaProp(
-        mp,
-        agg,
-        encoder,
-        interaction,
-        X_d_transform=X_d_transform,
-        batch_norm=config.batch_norm,
-    )
-
-    return model
