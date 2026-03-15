@@ -19,6 +19,7 @@ from misc import set_seeds
 from models.config import DeltapropConfig
 from models.deltaprop.data import setup_train_val_dataloaders
 from models.deltaprop.model import DeltaProp, build_model
+from scipy.special import expit
 
 
 def get_molecule_datapoint(row):
@@ -183,34 +184,52 @@ def predict_func(
     test_embeds = embed_all(test_mol_ds, model, scale_X_d=True)
 
     with torch.no_grad():
-        pred_probs = (
-            model.interaction(test_embeds, train_embeds)
-            .sigmoid()
+        theta_hat_train = (
+            model.interaction.projector(train_embeds)
             .squeeze()
             .cpu()
             .numpy()
         )
 
-    if isinstance(df_classification_threshold, LT):
-        # by default, pred_probs[i, j] contains prob(i > j)
-        # doing 1 - pred_probs will give us prob (i <= j)
-        pred_probs = 1 - pred_probs
+        theta_hat_test = (
+            model.interaction.projector(test_embeds)
+            .squeeze()
+            .cpu()
+            .numpy()
+        )
 
-    pos_mask = train_labels
-    neg_mask = ~pos_mask
-    
-    pos_contrib = pred_probs[:, pos_mask]
-    neg_contrib = pred_probs[:, neg_mask]
-    if pos_contrib.shape[-1] == 0:
-        pred_probs = neg_contrib.mean(axis=-1)
+    iso = IsotonicRegression(increasing=True, out_of_bounds='clip')
+    iso.fit(theta_hat_train, train_mol_ds.Y.squeeze())
 
-    elif neg_contrib.shape[-1] == 0:
-        pred_probs = pos_contrib.mean(axis=-1)
+    order = np.argsort(theta_hat_train)
+    theta_k = np.interp(
+        df_classification_threshold.th, 
+        iso.predict(theta_hat_train[order]), 
+        theta_hat_train[order]
+    )
 
-    else:
-        pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
-        neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
-        pred_probs = (pos_contrib + neg_contrib) / 2
+    pred_probs = expit(theta_hat_test - theta_k)
+
+    # if isinstance(df_classification_threshold, LT):
+    #     # by default, pred_probs[i, j] contains prob(i > j)
+    #     # doing 1 - pred_probs will give us prob (i <= j)
+    #     pred_probs = 1 - pred_probs
+
+    # pos_mask = train_labels
+    # neg_mask = ~pos_mask
+
+    # pos_contrib = pred_probs[:, pos_mask]
+    # neg_contrib = pred_probs[:, neg_mask]
+    # if pos_contrib.shape[-1] == 0:
+    #     pred_probs = neg_contrib.mean(axis=-1)
+
+    # elif neg_contrib.shape[-1] == 0:
+    #     pred_probs = pos_contrib.mean(axis=-1)
+
+    # else:
+    #     pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
+    #     neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
+    #     pred_probs = (pos_contrib + neg_contrib) / 2
 
     preds = (pred_probs >= binary_classification_threshold).astype(float)
 
@@ -232,34 +251,52 @@ def tune_binary_classification_threshold(
     val_embeds = embed_all(val_mol_ds, model)
 
     with torch.no_grad():
-        pred_probs = (
-            model.interaction(val_embeds, train_embeds)
-            .sigmoid()
+        theta_hat_train = (
+            model.interaction.projector(train_embeds)
             .squeeze()
             .cpu()
             .numpy()
         )
 
-    if isinstance(df_classification_threshold, LT):
-        # by default, pred_probs[i, j] contains prob(i > j)
-        # doing 1 - pred_probs will give us prob (i <= j)
-        pred_probs = 1 - pred_probs
+        theta_hat_val = (
+            model.interaction.projector(val_embeds)
+            .squeeze()
+            .cpu()
+            .numpy()
+        )
 
-    pos_mask = train_labels
-    neg_mask = ~pos_mask
+    iso = IsotonicRegression(increasing=True, out_of_bounds='clip')
+    iso.fit(theta_hat_train, train_mol_ds.Y.squeeze())
 
-    pos_contrib = pred_probs[:, pos_mask]
-    neg_contrib = pred_probs[:, neg_mask]
-    if pos_contrib.shape[-1] == 0:
-        pred_probs = neg_contrib.mean(axis=-1)
+    order = np.argsort(theta_hat_train)
+    theta_k = np.interp(
+        df_classification_threshold.th, 
+        iso.predict(theta_hat_train[order]), 
+        theta_hat_train[order]
+    )
 
-    elif neg_contrib.shape[-1] == 0:
-        pred_probs = pos_contrib.mean(axis=-1)
+    pred_probs = expit(theta_hat_val - theta_k)
 
-    else:
-        pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
-        neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
-        pred_probs = (pos_contrib + neg_contrib) / 2
+    # if isinstance(df_classification_threshold, LT):
+    #     # by default, pred_probs[i, j] contains prob(i > j)
+    #     # doing 1 - pred_probs will give us prob (i <= j)
+    #     pred_probs = 1 - pred_probs
+
+    # pos_mask = train_labels
+    # neg_mask = ~pos_mask
+
+    # pos_contrib = pred_probs[:, pos_mask]
+    # neg_contrib = pred_probs[:, neg_mask]
+    # if pos_contrib.shape[-1] == 0:
+    #     pred_probs = neg_contrib.mean(axis=-1)
+
+    # elif neg_contrib.shape[-1] == 0:
+    #     pred_probs = pos_contrib.mean(axis=-1)
+
+    # else:
+    #     pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
+    #     neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
+    #     pred_probs = (pos_contrib + neg_contrib) / 2
 
     thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
     optimal_threshold = optimize_threshold_from_predictions(
