@@ -96,7 +96,7 @@ def deltaprop(
                 result_dict
                 | asdict(model_cf)
                 | asdict(train_cf)
-                | dict(dataset=dataset, model="deltaprop")
+                | dict(dataset=dataset, model="deltaprop-btl")
             )
 
         print(result_dict)
