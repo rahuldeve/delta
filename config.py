@@ -14,6 +14,7 @@ class TrainConfig:
     max_epochs: int = 50
     early_stopping_patience: int = 20
     n_splits: int = 5
+    use_feats: bool = False
     split_type: SplitType = SplitType.BUTINA
     random_seed: int = 42
 

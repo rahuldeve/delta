@@ -89,26 +89,28 @@ def getMolDescriptors(mol):
     return res
 
 
-def preprocess_row(row):
+def preprocess_row(row, generate_features):
     smi = row["smiles"]
     mol = standardize(smi)
 
     if mol is None:
-        return dict(inchi=None, scaffold=None) | {
-            f"feat_{name}": None for name, _ in Descriptors.descList
-        }
+        retval = dict(inchi=None, scaffold=None)
+        if generate_features:
+            retval = retval | {f"feat_{name}": None for name, _ in Descriptors.descList}
 
-    return dict(
-        inchi=mol_to_inchi(mol), scaffold=get_scaffold(mol)
-    ) | getMolDescriptors(mol)
+    retval = dict(inchi=mol_to_inchi(mol), scaffold=get_scaffold(mol))
+    if generate_features:
+        retval = retval | getMolDescriptors(mol)
+
+    return retval
 
 
-def preprocess_ray(df):
+def preprocess_ray(df, generate_features):
     assert "smiles" in set(df.columns)
 
     df = (
         ray.data.from_pandas(df, override_num_blocks=len(df) // 64)
-        .map(lambda row: row | preprocess_row(row))
+        .map(lambda row: row | preprocess_row(row, generate_features))
         # filter any rows that have None. This includes any mols that have NaN descriptor values
         .filter(lambda row: not any(pd.isna(v) for v in row.values()))
         .to_pandas()

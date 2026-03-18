@@ -37,7 +37,15 @@ def baseline(
         import wandb
 
         wandb.login(key="cf344975eb80edf6f0d52af80528cc6094234caf")
-        tags = set(wandb_cf.tags) | set(['baseline', dataset.name.lower(), train_cf.split_type])
+        tags = set(wandb_cf.tags) | set([
+            'baseline', 
+            dataset.name.lower(), 
+            train_cf.split_type,
+        ])
+
+        if train_cf.use_feats:
+            tags = tags | set(['with-feats'])
+            
         run = wandb.init(project=wandb_cf.project_name, tags=list(tags))
         run.mark_preempting()
 
@@ -77,7 +85,15 @@ def deltaprop(
         import wandb
 
         wandb.login(key="cf344975eb80edf6f0d52af80528cc6094234caf")
-        tags = set(wandb_cf.tags) | set(['deltaprop', dataset.name.lower(), train_cf.split_type])
+        tags = set(wandb_cf.tags) | set([
+            'deltaprop', 
+            dataset.name.lower(), 
+            train_cf.split_type,
+        ])
+
+        if train_cf.use_feats:
+            tags = tags | set(['with-feats'])
+
         run = wandb.init(project=wandb_cf.project_name, tags=list(tags))
         run.mark_preempting()
 
