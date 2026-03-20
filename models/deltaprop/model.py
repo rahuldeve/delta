@@ -6,16 +6,14 @@ from typing import Self
 import torch
 from chemprop.conf import DEFAULT_HIDDEN_DIM
 from chemprop.data import BatchMolGraph, TrainingBatch
-from chemprop.nn import Aggregation, BondMessagePassing, MessagePassing, NormAggregation
+from chemprop.nn import Aggregation, MessagePassing
 from chemprop.nn.ffn import MLP
 from chemprop.nn.transforms import ScaleTransform
 from chemprop.schedulers import build_NoamLike_LRSched
 from lightning import pytorch as pl
 from lightning.pytorch.core.mixins.hparams_mixin import HyperparametersMixin
-from sklearn.preprocessing import StandardScaler
 from torch import Tensor, nn, optim
 
-from models.config import DeltapropConfig
 from models.deltaprop.data import RandomPairTrainBatch
 
 logger = logging.getLogger(__name__)
@@ -370,50 +368,3 @@ class DeltaProp(pl.LightningModule):
 
         return model
 
-
-def build_model(
-    config: DeltapropConfig, X_d_scaler: StandardScaler | None
-) -> DeltaProp:
-    if X_d_scaler is not None:
-        X_d_transform = ScaleTransform.from_standard_scaler(X_d_scaler)
-        num_mol_feats = X_d_scaler.n_features_in_
-    else:
-        X_d_transform = None
-        num_mol_feats = 0
-
-    if config.use_chameleon_mp:
-        chemeleon_mp = torch.load("./chemeleon_mp.pt", weights_only=True)
-        mp = BondMessagePassing(**chemeleon_mp["hyper_parameters"])  # type: ignore
-        mp.load_state_dict(chemeleon_mp["state_dict"])
-    else:
-        mp = BondMessagePassing(
-            d_h=config.mp_d_h,
-            depth=config.mp_depth,
-            dropout=config.mp_dropout,
-        )  # type: ignore
-
-    agg = NormAggregation()
-    ffn_dims = mp.output_dim + num_mol_feats
-    encoder = Encoder(
-        input_dim=ffn_dims,
-        hidden_dim=config.encoder_hidden_dim,
-        output_dim=config.encoder_output_dim,
-        activation=torch.nn.PReLU(),
-    )
-    interaction = Interaction(encoder.output_dim, dropout=config.interaction_dropout)
-
-    X_d_transform = (
-        ScaleTransform.from_standard_scaler(X_d_scaler)
-        if X_d_scaler is not None
-        else None
-    )
-    model = DeltaProp(
-        mp,
-        agg,
-        encoder,
-        interaction,
-        X_d_transform=X_d_transform,
-        batch_norm=config.batch_norm,
-    )
-
-    return model
