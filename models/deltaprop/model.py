@@ -41,8 +41,11 @@ class Encoder(nn.Module, HyperparametersMixin):
             input_dim, output_dim, hidden_dim, n_layers, dropout, activation
         )
 
+        self.ln_in = nn.LayerNorm(input_dim)
+        self.ln_out = nn.LayerNorm(output_dim)
+
     def forward(self, Z: Tensor) -> Tensor:
-        return self.ffn(Z)
+        return self.ln_out(self.ffn(self.ln_in(Z)))
 
     @property
     def input_dim(self):
@@ -149,8 +152,6 @@ class DeltaProp(pl.LightningModule):
             X_d_transform if X_d_transform is not None else nn.Identity()
         )
 
-        self.ln = nn.LayerNorm(self.encoder.input_dim)
-
         self.warmup_epochs = warmup_epochs
         self.init_lr = init_lr
         self.max_lr = max_lr
@@ -158,13 +159,13 @@ class DeltaProp(pl.LightningModule):
 
         self.loss_fn = nn.BCEWithLogitsLoss()
 
-    def fingerprint(
-        self, bmg: BatchMolGraph, V_d: Tensor | None = None, X_d: Tensor | None = None
-    ) -> Tensor:
-        H_v = self.message_passing(bmg, V_d)
-        H = self.agg(H_v, bmg.batch)
-        H = self.bn(H)
-        return H if X_d is None else torch.cat((H, self.X_d_transform(X_d)), dim=1)
+    # def fingerprint(
+    #     self, bmg: BatchMolGraph, V_d: Tensor | None = None, X_d: Tensor | None = None
+    # ) -> Tensor:
+    #     H_v = self.message_passing(bmg, V_d)
+    #     H = self.agg(H_v, bmg.batch)
+    #     H = self.bn(H)
+    #     return H if X_d is None else torch.cat((H, self.X_d_transform(X_d)), dim=1)
 
     def encoding(
         self, bmg: BatchMolGraph, V_d: Tensor | None = None, X_d: Tensor | None = None
@@ -176,7 +177,7 @@ class DeltaProp(pl.LightningModule):
         Z = self.encoder(
             H
             if X_d is None
-            else self.ln(torch.cat((H, self.X_d_transform(X_d)), dim=1))
+            else torch.cat((H, self.X_d_transform(X_d)), dim=1)
         )
 
         Z = Z if X_d is None else Z + H
