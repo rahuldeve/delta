@@ -28,6 +28,7 @@ class WandbDisabled:
 class WandbEnabled:
     project_name: str = "evaluate_tba"
     tags: list[str] = field(default_factory=list)
+    model_name_suffix: str|None = None
 
 
 WandbConfig = WandbDisabled | WandbEnabled

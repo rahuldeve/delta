@@ -60,11 +60,13 @@ def baseline(
 
     for result_dict in result_iter:
         if isinstance(wandb_cf, WandbEnabled):
+            model_name_suffix = wandb_cf.model_name_suffix
+            model_name = "baseline" + (model_name_suffix if model_name_suffix else "")
             wandb.log(  # type: ignore
                 result_dict
                 | asdict(model_cf)
                 | asdict(train_cf)
-                | dict(dataset=dataset, model="baseline")
+                | dict(dataset=dataset, model=model_name)
             )
 
         print(result_dict)
@@ -108,11 +110,13 @@ def deltaprop(
 
     for result_dict in result_iter:
         if isinstance(wandb_cf, WandbEnabled):
+            model_name_suffix = wandb_cf.model_name_suffix
+            model_name = "deltaprop" + (model_name_suffix if model_name_suffix else "")
             wandb.log(  # type: ignore
                 result_dict
                 | asdict(model_cf)
                 | asdict(train_cf)
-                | dict(dataset=dataset, model="deltaprop")
+                | dict(dataset=dataset, model=model_name)
             )
 
         print(result_dict)
