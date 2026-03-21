@@ -63,7 +63,7 @@ def baseline(
     for result_dict in result_iter:
         if isinstance(wandb_cf, WandbEnabled):
             model_name_suffix = wandb_cf.model_name_suffix
-            model_name = "baseline" + (model_name_suffix if model_name_suffix else "")
+            model_name = "baseline" + (f"-{model_name_suffix}" if model_name_suffix else "")
             wandb.log(  # type: ignore
                 result_dict
                 | asdict(model_cf)
