@@ -97,6 +97,7 @@ def preprocess_row(row, generate_features):
         retval = dict(inchi=None, scaffold=None)
         if generate_features:
             retval = retval | {f"feat_{name}": None for name, _ in Descriptors.descList}
+        return retval
 
     retval = dict(inchi=mol_to_inchi(mol), scaffold=get_scaffold(mol))
     if generate_features:
