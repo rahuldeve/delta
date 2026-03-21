@@ -1,5 +1,6 @@
 import io
 import logging
+import math
 import traceback
 from typing import Self
 
@@ -159,6 +160,28 @@ class DeltaProp(pl.LightningModule):
 
         self.loss_fn = nn.BCEWithLogitsLoss()
 
+    def get_alpha(self) -> float:
+        alpha_min = 1e-3
+        alpha_max = 5e-2
+        warmup_start = 0.35  # fraction of training
+        warmup_end = 0.85
+
+        if self._trainer is None:
+            return alpha_max
+
+        current_epoch = self.trainer.current_epoch
+        max_epochs = self.trainer.max_epochs
+
+        progress = current_epoch / max_epochs
+
+        if progress <= warmup_start:
+            return alpha_min
+        if progress >= warmup_end:
+            return alpha_max
+
+        t = (progress - warmup_start) / (warmup_end - warmup_start)
+        return alpha_min + (alpha_max - alpha_min) * (1 - math.cos(math.pi * t)) / 2
+
     # def fingerprint(
     #     self, bmg: BatchMolGraph, V_d: Tensor | None = None, X_d: Tensor | None = None
     # ) -> Tensor:
@@ -177,7 +200,7 @@ class DeltaProp(pl.LightningModule):
         Z = self.encoder(
             H
             if X_d is None
-            else torch.cat((H, self.X_d_transform(X_d)), dim=1)
+            else torch.cat((H, self.get_alpha() * self.X_d_transform(X_d)), dim=1)
         )
 
         Z = Z if X_d is None else Z + H
@@ -368,4 +391,3 @@ class DeltaProp(pl.LightningModule):
         model.load_state_dict(state_dict, strict=strict)
 
         return model
-
