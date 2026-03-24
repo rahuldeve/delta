@@ -30,6 +30,7 @@ dependencies = [
     "tqdm>=4.67.1",
     "tyro>=1.0.5",
     "wandb>=0.21.0",
+    "xgboost>=3.2.0",
 ]
 
 [dependency-groups]

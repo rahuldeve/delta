@@ -32,3 +32,8 @@ class DeltapropConfig(ModelConfig):
     interaction_dropout: float = 0.0
     candidate_size: int = 16
     use_chameleon_mp: bool = False
+
+
+@dataclass
+class XGBoostConfig(ModelConfig):
+    random_state: int = 42
