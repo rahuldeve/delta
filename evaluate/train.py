@@ -136,7 +136,7 @@ def train_and_evaluate_split(
         df_classification_threshold=df_classification_threshold,
     )
 
-    return calc_metrics(pred_probs, preds, test_df["bin_target"])
+    return calc_metrics(pred_probs, preds, test_df["bin_target"]), (pred_probs, preds)
 
 
 def train_and_evaluate(
@@ -156,7 +156,7 @@ def train_and_evaluate(
         outer_idx, inner_idx = split_idxs
         train_df, val_df, test_df = split
 
-        metrics_dict = train_and_evaluate_split(
+        metrics_dict, predictions = train_and_evaluate_split(
             train_df=train_df,
             val_df=val_df,
             test_df=test_df,
@@ -167,4 +167,4 @@ def train_and_evaluate(
         )
 
         result_dict = {"outer": outer_idx, "inner": inner_idx} | metrics_dict
-        yield result_dict
+        yield result_dict, predictions, (train_df, val_df, test_df)

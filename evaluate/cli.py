@@ -1,3 +1,4 @@
+import pickle
 from dataclasses import asdict
 
 import tyro
@@ -22,6 +23,25 @@ def prepare_dataset(dataset: SupportedDatasets, generate_features: bool):
     ray.shutdown()
 
     return df, df_classification_threshold
+
+
+def wandb_log_artifacts(result_dict, predictions, split):
+    import wandb
+    artifact = wandb.Artifact( # type: ignore
+        name=f"{result_dict['outer']}x{result_dict['inner']}_artifacts",
+        type="generic"
+    )
+    
+    with artifact.new_file("predictions.pkl", mode="wb") as f:
+        pred_probs, preds = predictions
+        pickle.dump({"pred_probs": pred_probs, "preds": preds}, f)
+
+    with artifact.new_file("split.pkl", mode="wb") as f:
+        train_df, val_df, test_df = split
+        pickle.dump({"train": train_df, "cal": val_df, "test": test_df}, f)
+
+    wandb.run.log_artifact(artifact) # type: ignore
+
 
 
 def baseline(
@@ -60,7 +80,7 @@ def baseline(
         train_config=train_cf,
     )
 
-    for result_dict in result_iter:
+    for result_dict, predictions, split in result_iter:
         if isinstance(wandb_cf, WandbEnabled):
             model_name_suffix = wandb_cf.model_name_suffix
             model_name = "baseline" + (f"-{model_name_suffix}" if model_name_suffix else "")
@@ -70,6 +90,9 @@ def baseline(
                 | asdict(train_cf)
                 | dict(dataset=dataset, model=model_name)
             )
+
+            wandb_log_artifacts(result_dict, predictions, split)
+
 
         print(result_dict)
 
@@ -112,7 +135,7 @@ def deltaprop(
         train_config=train_cf,
     )
 
-    for result_dict in result_iter:
+    for result_dict, predictions, split in result_iter:
         if isinstance(wandb_cf, WandbEnabled):
             model_name_suffix = wandb_cf.model_name_suffix
             model_name = "deltaprop" + (f"-{model_name_suffix}" if model_name_suffix else "")
@@ -122,6 +145,8 @@ def deltaprop(
                 | asdict(train_cf)
                 | dict(dataset=dataset, model=model_name)
             )
+
+            wandb_log_artifacts(result_dict, predictions, split)
 
         print(result_dict)
 
@@ -164,7 +189,7 @@ def xgboost(
         train_config=train_cf,
     )
 
-    for result_dict in result_iter:
+    for result_dict, predictions, split in result_iter:
         if isinstance(wandb_cf, WandbEnabled):
             model_name_suffix = wandb_cf.model_name_suffix
             model_name = "xgboost" + (f"-{model_name_suffix}" if model_name_suffix else "")
@@ -174,6 +199,8 @@ def xgboost(
                 | asdict(train_cf)
                 | dict(dataset=dataset, model=model_name)
             )
+
+            wandb_log_artifacts(result_dict, predictions, split)
 
         print(result_dict)
 
