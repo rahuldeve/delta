@@ -42,11 +42,16 @@ class Encoder(nn.Module, HyperparametersMixin):
             input_dim, output_dim, hidden_dim, n_layers, dropout, activation
         )
 
-        self.ln_in = nn.LayerNorm(input_dim)
-        self.ln_out = nn.LayerNorm(output_dim)
+        self.ln = nn.LayerNorm(input_dim - output_dim)
 
-    def forward(self, Z: Tensor) -> Tensor:
-        return self.ln_out(self.ffn(self.ln_in(Z)))
+    def forward(self, H: Tensor, X_d: Tensor | None, alpha: float) -> Tensor:        
+        if X_d is None:
+            return self.ffn(H)
+        else:
+            Z = alpha * self.ln(X_d)
+            Z = self.ffn(torch.cat((H, Z), dim=1))
+            return Z + H
+
 
     @property
     def input_dim(self):
@@ -185,12 +190,10 @@ class DeltaProp(pl.LightningModule):
         H = self.bn(H)
 
         Z = self.encoder(
-            H
-            if X_d is None
-            else torch.cat((H, self.get_alpha() * self.X_d_transform(X_d)), dim=1)
+            H,
+            self.X_d_transform(X_d) if X_d is not None else None,
+            self.get_alpha()
         )
-
-        Z = Z if X_d is None else Z + H
         return Z
 
     def embed_simple_batch(self, batch: TrainingBatch):
