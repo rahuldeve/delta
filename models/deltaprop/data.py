@@ -121,7 +121,7 @@ def setup_train_val_dataloaders(
         collate_fn=RandomPairDataset.collate_function,
         worker_init_fn=seed_worker,
         num_workers=num_workers,
-        drop_last=True,
+        drop_last=False,
     )
 
     val_pair_dl = DataLoader(

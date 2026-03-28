@@ -42,11 +42,16 @@ class Encoder(nn.Module, HyperparametersMixin):
             input_dim, output_dim, hidden_dim, n_layers, dropout, activation
         )
 
-        self.ln_in = nn.LayerNorm(input_dim)
-        self.ln_out = nn.LayerNorm(output_dim)
+        self.ln = nn.LayerNorm(input_dim - output_dim)
 
-    def forward(self, Z: Tensor) -> Tensor:
-        return self.ln_out(self.ffn(self.ln_in(Z)))
+    def forward(self, H: Tensor, X_d: Tensor | None, alpha: float) -> Tensor:        
+        if X_d is None:
+            return self.ffn(H)
+        else:
+            Z = alpha * self.ln(X_d)
+            Z = self.ffn(torch.cat((H, Z), dim=1))
+            return Z + H
+
 
     @property
     def input_dim(self):
@@ -63,27 +68,14 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
         self.save_hyperparameters()
         self.hparams["cls"] = self.__class__
 
-        self.head_mat = torch.nn.Sequential(*[
-            torch.nn.Linear(ndims, ndims),
-            torch.nn.SELU(),
-            torch.nn.Linear(ndims, ndims),
-        ])
-
-        self.tail_mat = torch.nn.Sequential(*[
-            torch.nn.Linear(ndims, ndims),
-            torch.nn.SELU(),
-            torch.nn.Linear(ndims, ndims),
-        ])
+        self.interaction_matrix = torch.nn.Linear(ndims, ndims, bias=False)
         self.interaction_dropout = torch.nn.Dropout(dropout)
 
         self.loss_fn = nn.BCEWithLogitsLoss()
 
     def forward(self, head_emb: Tensor, tail_emb: Tensor):
-        # R = self.interaction_matrix.weight.unsqueeze(0)
-        head_emb = self.head_mat(head_emb)
-        tail_emb = self.tail_mat(tail_emb)
-
-        Z = self.interaction_dropout(head_emb) @ tail_emb.transpose(-2, -1)
+        R = self.interaction_matrix.weight.unsqueeze(0)
+        Z = self.interaction_dropout(head_emb @ R) @ tail_emb.transpose(-2, -1)
         return Z.squeeze()
 
     def bidirectional_interaction_loss(
@@ -198,12 +190,10 @@ class DeltaProp(pl.LightningModule):
         H = self.bn(H)
 
         Z = self.encoder(
-            H
-            if X_d is None
-            else torch.cat((H, self.get_alpha() * self.X_d_transform(X_d)), dim=1)
+            H,
+            self.X_d_transform(X_d) if X_d is not None else None,
+            self.get_alpha()
         )
-
-        Z = Z if X_d is None else Z + H
         return Z
 
     def embed_simple_batch(self, batch: TrainingBatch):
