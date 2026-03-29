@@ -48,8 +48,8 @@ class Encoder(nn.Module, HyperparametersMixin):
         if X_d is None:
             return self.ffn(H)
         else:
-            Z = alpha * self.ln(X_d)
-            Z = self.ffn(torch.cat((H, Z), dim=1))
+            Z = torch.cat((H, alpha * X_d), dim=1)
+            Z = self.ffn(self.ln(Z))
             return Z + H
 
 
