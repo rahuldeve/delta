@@ -42,7 +42,7 @@ class Encoder(nn.Module, HyperparametersMixin):
             input_dim, output_dim, hidden_dim, n_layers, dropout, activation
         )
 
-        self.ln = nn.LayerNorm(input_dim - output_dim)
+        self.ln = nn.LayerNorm(input_dim)
 
     def forward(self, H: Tensor, X_d: Tensor | None, alpha: float) -> Tensor:        
         if X_d is None:
