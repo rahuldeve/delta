@@ -8,7 +8,7 @@ from data import SupportedDatasets
 from models.config import BaselineConfig, DeltapropConfig, XGBoostConfig
 
 
-def prepare_dataset(dataset: SupportedDatasets, generate_features: bool):
+def prepare_dataset(dataset: SupportedDatasets, use_features: bool):
     # Lazy import here to prevent cli startup from being slow
     import ray
 
@@ -18,7 +18,7 @@ def prepare_dataset(dataset: SupportedDatasets, generate_features: bool):
     ray.init(ignore_reinit_error=True, num_cpus=4)
 
     df, df_classification_threshold = load_dataset(dataset)
-    df = preprocess_ray(df, generate_features=generate_features)
+    df = preprocess_ray(df, use_features=use_features)
 
     ray.shutdown()
 
@@ -70,7 +70,7 @@ def baseline(
         run.mark_preempting()
 
     df, df_classification_threshold = prepare_dataset(
-        dataset, generate_features=train_cf.use_feats
+        dataset, use_features=train_cf.use_feats
     )
     result_iter = train_and_evaluate(
         df=df,
@@ -125,7 +125,7 @@ def deltaprop(
         run.mark_preempting()
 
     df, df_classification_threshold = prepare_dataset(
-        dataset, generate_features=train_cf.use_feats
+        dataset, use_features=train_cf.use_feats
     )
     result_iter = train_and_evaluate(
         df=df,
@@ -179,7 +179,7 @@ def xgboost(
         run.mark_preempting()
 
     df, df_classification_threshold = prepare_dataset(
-        dataset, generate_features=train_cf.use_feats
+        dataset, use_features=train_cf.use_feats
     )
     result_iter = train_and_evaluate(
         df=df,

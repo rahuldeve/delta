@@ -106,12 +106,17 @@ def preprocess_row(row, generate_features):
     return retval
 
 
-def preprocess_ray(df, generate_features):
+def preprocess_ray(df, use_features):
+    # We are goint to generate features by default. Some mols may have some rdkit features be NaNs and hence
+    # were being dropped. This is problematic during evaluation since the dataset is going to be different with
+    # use_features=True vs use_features=False. For now we are generating all features and dropping mols with NaN
+    # features irrespective of use_features. This ensures that the dataset is consistent. if use_features=False,
+    # the generated feature columns are dropped
     assert "smiles" in set(df.columns)
 
     df = (
         ray.data.from_pandas(df, override_num_blocks=len(df) // 64)
-        .map(lambda row: row | preprocess_row(row, generate_features))
+        .map(lambda row: row | preprocess_row(row, generate_features=True))
         # filter any rows that have None. This includes any mols that have NaN descriptor values
         .filter(lambda row: not any(pd.isna(v) for v in row.values()))
         .to_pandas()
@@ -125,4 +130,8 @@ def preprocess_ray(df, generate_features):
     df["butina_cluster"] = get_butina_clusters(df["mol"])
 
     df = df.drop(["smiles", "inchi", "scaffold"], axis=1)
+    if not use_features:
+        non_feat_cols = [c for c in df.columns if not c.startswith('feat')]
+        df = df.loc[:, non_feat_cols]
+
     return df
