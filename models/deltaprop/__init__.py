@@ -180,13 +180,13 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             candidate_size=model_config.candidate_size
         )
 
-        from lightning.pytorch.loggers import WandbLogger
-        wandb_logger = WandbLogger(project="debug_gsk_hepg2", log_model="all", save_code=True)
-        wandb_logger.watch(self.model, log="gradients", log_freq=10) 
-        wandb_logger.experiment.mark_preempting()
+        # from lightning.pytorch.loggers import WandbLogger
+        # wandb_logger = WandbLogger(project="debug_gsk_hepg2", log_model="all", save_code=True)
+        # wandb_logger.watch(self.model, log="gradients", log_freq=10) 
+        # wandb_logger.experiment.mark_preempting()
 
         trainer = L.Trainer(
-            logger=wandb_logger,
+            logger=None,
             enable_checkpointing=True,
             enable_progress_bar=True,
             accelerator="auto",
