@@ -180,13 +180,13 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             candidate_size=model_config.candidate_size
         )
 
-        # from lightning.pytorch.loggers import WandbLogger
-        # wandb_logger = WandbLogger(project="debug_gsk_hepg2", log_model="all", save_code=True)
-        # wandb_logger.watch(self.model, log="gradients", log_freq=10) 
-        # wandb_logger.experiment.mark_preempting()
+        from lightning.pytorch.loggers import WandbLogger
+        wandb_logger = WandbLogger(project="debug_gsk_hepg2", log_model="all", save_code=True)
+        wandb_logger.watch(self.model, log="gradients", log_freq=10) 
+        wandb_logger.experiment.mark_preempting()
 
         trainer = L.Trainer(
-            logger=None,
+            logger=wandb_logger,
             enable_checkpointing=True,
             enable_progress_bar=True,
             accelerator="auto",
@@ -304,8 +304,10 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             # doing 1 - pred_probs will give us prob (i <= j)
             theta_hat_train = 1 - theta_hat_train
             theta_hat_test = 1 - theta_hat_test
-
-        iso = IsotonicRegression(increasing=True, out_of_bounds='clip')
+            iso = IsotonicRegression(increasing=False, out_of_bounds='clip')
+        else:
+            iso = IsotonicRegression(increasing=True, out_of_bounds='clip')
+            
         iso.fit(theta_hat_train, train_labels.squeeze())
 
         order = np.argsort(theta_hat_train)
