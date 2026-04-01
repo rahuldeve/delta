@@ -138,7 +138,7 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             input_dim=ffn_dims,
             hidden_dim=model_config.encoder_hidden_dim,
             output_dim=model_config.encoder_output_dim,
-            activation=torch.nn.PReLU(),
+            activation='elu',
         )
         interaction = Interaction(encoder.output_dim, dropout=model_config.interaction_dropout)
 
@@ -178,8 +178,13 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             candidate_size=model_config.candidate_size
         )
 
+        from lightning.pytorch.loggers import WandbLogger
+        wandb_logger = WandbLogger(project="debug_gsk_hepg2", log_model="all", save_code=True)
+        wandb_logger.watch(self.model, log="gradients", log_freq=50) 
+        wandb_logger.experiment.mark_preempting()
+
         trainer = L.Trainer(
-            logger=None,
+            logger=wandb_logger,
             enable_checkpointing=True,
             enable_progress_bar=True,
             accelerator="auto",
