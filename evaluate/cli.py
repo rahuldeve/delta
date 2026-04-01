@@ -143,7 +143,7 @@ def deltaprop(
                 result_dict
                 | asdict(model_cf)
                 | asdict(train_cf)
-                | dict(dataset=dataset, model=model_name)
+                | dict(dataset=dataset, model="deltaprop-btl")
             )
 
             wandb_log_artifacts(result_dict, predictions, split)
