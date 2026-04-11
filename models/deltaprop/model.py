@@ -97,10 +97,7 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
         rl_labels = (target_candidates >= target_anchor).squeeze()  # type: ignore
         rl_loss = self.loss_fn(rl_interaction, rl_labels.float())
 
-        delta = (lr_interaction.sigmoid() + rl_interaction.sigmoid() - 1.0) ** 2
-        symm_loss = delta.mean(dim=-1).mean()
-
-        return symm_loss, lr_loss, rl_loss
+        return lr_loss, rl_loss
 
 
 class DeltaProp(pl.LightningModule):
@@ -210,12 +207,12 @@ class DeltaProp(pl.LightningModule):
         bmg, V_d, X_d, target_candidates, _, _, _ = batch.candidates
         Z_candidates = self.encoding(bmg, V_d, X_d)
 
-        (sym_loss, lr_loss, rl_loss) = self.interaction.bidirectional_interaction_loss(
+        (lr_loss, rl_loss) = self.interaction.bidirectional_interaction_loss(
             Z_anchor, Z_candidates, target_anchor, target_candidates, B, C
         )
 
-        loss = (sym_loss + lr_loss + rl_loss) / 3
-        return loss, (sym_loss, lr_loss, rl_loss)
+        loss = (lr_loss + rl_loss) / 2
+        return loss, (lr_loss, rl_loss)
 
     def on_validation_model_eval(self) -> None:
         self.eval()
@@ -224,15 +221,7 @@ class DeltaProp(pl.LightningModule):
         self.X_d_transform.train()
 
     def training_step(self, batch: RandomPairTrainBatch, batch_idx):  # type: ignore
-        loss, (sym_loss, lr_loss, rl_loss) = self.get_losses(batch)
-
-        self.log(
-            "train_sym_loss",
-            sym_loss,
-            batch_size=batch.B,
-            on_epoch=True,
-            enable_graph=True,
-        )
+        loss, (lr_loss, rl_loss) = self.get_losses(batch)
 
         self.log(
             "train_lr_loss",
@@ -254,15 +243,7 @@ class DeltaProp(pl.LightningModule):
         return loss
 
     def validation_step(self, batch: RandomPairTrainBatch, batch_idx):  # type: ignore
-        loss, (sym_loss, lr_loss, rl_loss) = self.get_losses(batch)
-
-        self.log(
-            "val_sym_loss",
-            sym_loss,
-            batch_size=batch.B,
-            on_epoch=True,
-            enable_graph=True,
-        )
+        loss, (lr_loss, rl_loss) = self.get_losses(batch)
 
         self.log(
             "val_lr_loss",
