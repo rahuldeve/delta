@@ -42,9 +42,9 @@ class RandomPairDataset(Dataset):
     def get_exemplar_candidates(self):
         targets = self.candidate_dataset.Y.squeeze()
         if isinstance(self.binary_threshold, GT):
-            exemplar_mask = targets > self.binary_threshold.th
+            exemplar_mask = targets >= self.binary_threshold.th
         elif isinstance(self.binary_threshold, LT):
-            exemplar_mask = targets < self.binary_threshold.th
+            exemplar_mask = targets <= self.binary_threshold.th
         else:
             raise ValueError(self.binary_threshold)
 
@@ -70,7 +70,7 @@ class RandomPairDataset(Dataset):
         
         non_exemplar_idxs = np.argwhere(~exemplar_mask).squeeze()
 
-        candidate_idxs = np.random.choice(non_exemplar_idxs, size=(n,), replace=True)
+        candidate_idxs = np.random.choice(non_exemplar_idxs, size=(n,), replace=False)
         return [self.candidate_dataset[idx] for idx in candidate_idxs]
 
     def __getitem__(self, idx) -> RandomPairDataPoint:

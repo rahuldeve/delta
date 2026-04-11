@@ -25,7 +25,7 @@ from models.abc import PreparedDatasetSplit, RefModel
 from models.config import DeltapropConfig
 from models.deltaprop.model import DeltaProp, Encoder, Interaction
 from models.deltaprop.data import setup_train_val_dataloaders
-from data import LT, DSThreshold
+from data import GT, DSThreshold
 
 
 def get_molecule_datapoint(row):
@@ -223,19 +223,25 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         train_embeds = embed_all(train_split, model)
         val_embeds = embed_all(val_split, model)
 
-        with torch.no_grad():
-            pred_probs = (
-                model.interaction(val_embeds, train_embeds)
-                .sigmoid()
-                .squeeze()
-                .cpu()
-                .numpy()
-            )
+        if isinstance(df_classification_threshold, GT):
+            with torch.no_grad():
+                pred_probs = (
+                    model.interaction(val_embeds, train_embeds)
+                    .sigmoid()
+                    .squeeze()
+                    .cpu()
+                    .numpy()
+                )
 
-        if isinstance(df_classification_threshold, LT):
-            # by default, pred_probs[i, j] contains prob(i > j)
-            # doing 1 - pred_probs will give us prob (i <= j)
-            pred_probs = 1 - pred_probs
+        else:
+            with torch.no_grad():
+                pred_probs = (
+                    model.interaction(train_embeds, val_embeds)
+                    .sigmoid()
+                    .squeeze()
+                    .cpu()
+                    .numpy()
+                ).T
 
         pos_mask = train_labels
         neg_mask = ~pos_mask
@@ -280,19 +286,25 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         train_embeds = embed_all(train_split, model)
         test_embeds = embed_all(test_split, model, scale_X_d=True)
 
-        with torch.no_grad():
-            pred_probs = (
-                model.interaction(test_embeds, train_embeds)
-                .sigmoid()
-                .squeeze()
-                .cpu()
-                .numpy()
-            )
+        if isinstance(df_classification_threshold, GT):
+            with torch.no_grad():
+                pred_probs = (
+                    model.interaction(test_embeds, train_embeds)
+                    .sigmoid()
+                    .squeeze()
+                    .cpu()
+                    .numpy()
+                )
 
-        if isinstance(df_classification_threshold, LT):
-            # by default, pred_probs[i, j] contains prob(i > j)
-            # doing 1 - pred_probs will give us prob (i <= j)
-            pred_probs = 1 - pred_probs
+        else:
+            with torch.no_grad():
+                pred_probs = (
+                    model.interaction(train_embeds, test_embeds)
+                    .sigmoid()
+                    .squeeze()
+                    .cpu()
+                    .numpy()
+                ).T
 
         pos_mask = train_labels
         neg_mask = ~pos_mask

@@ -89,12 +89,12 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
 
         # left to right loss
         lr_interaction = self(Z_anchor, Z_candidates).squeeze()
-        lr_labels = (target_anchor > target_candidates).squeeze()  # type: ignore
+        lr_labels = (target_anchor >= target_candidates).squeeze()  # type: ignore
         lr_loss = self.loss_fn(lr_interaction, lr_labels.float())
 
         # right to left loss
         rl_interaction = self(Z_candidates, Z_anchor).squeeze()
-        rl_labels = ~lr_labels  # type: ignore
+        rl_labels = (target_candidates >= target_anchor).squeeze()  # type: ignore
         rl_loss = self.loss_fn(rl_interaction, rl_labels.float())
 
         delta = (lr_interaction.sigmoid() + rl_interaction.sigmoid() - 1.0) ** 2
