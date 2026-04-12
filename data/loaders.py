@@ -33,7 +33,7 @@ def load_gsk_hepg2():
 
 def load_derbyshire_malaria():
     df = pd.read_csv("./datasets/Derbyshire_malaria.csv")
-    cols = ["Compound SMILES", "Parasite % Control Avg"]
+    cols = ["Compound SMILES", "parasite % average"]
     df = df.loc[:, cols]
     df.columns = ["smiles", "parasite_remain_per"]
 
@@ -44,7 +44,7 @@ def load_derbyshire_malaria():
 
 def load_derbyshire_hepg2():
     df = pd.read_csv("./datasets/Derbyshire_malaria.csv")
-    cols = ["Compound SMILES", "Liver % Control Avg"]
+    cols = ["Compound SMILES", "liver % average"]
     df = df.loc[:, cols]
     df.columns = ["smiles", "liver_remain_per"]
 
