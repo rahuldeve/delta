@@ -129,14 +129,17 @@ def preprocess_ray(df, use_features, drop_nan_features):
 
     df = df.drop(["smiles", "inchi", "scaffold"], axis=1)
 
-    if use_features and drop_nan_features:
-        feats_to_drop = df.columns[df.isna().sum(axis=0) > 0]
-        print("Dropping following feature columns that contain NaNs:")
-        print(feats_to_drop)
-        df = df.drop(feats_to_drop, axis=1)
-        return df
+    if use_features:
+        if drop_nan_features:
+            feats_to_drop = df.columns[df.isna().sum(axis=0) > 0]
+            print("Dropping following feature columns that contain NaNs:")
+            print(feats_to_drop)
+            df = df.drop(feats_to_drop, axis=1)
+            return df
+        else:
+            return df
 
-    if not use_features:
+    else:
         non_feat_cols = [c for c in df.columns if not c.startswith("feat")]
         df = df.loc[:, non_feat_cols]
         return df
