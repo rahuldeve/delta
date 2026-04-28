@@ -137,7 +137,7 @@ def rm_tukey_hsd(df, metric, group_col, alpha=0.05, sort = False, direction_dict
 # -------------- Plotting routines -------------------#
 
 
-def make_boxplots_parametric(df, metric_ls):
+def make_boxplots_parametric(df, metric_ls, figsize=(28, 8)):
     """
     Create boxplots for each metric using repeated measures ANOVA.
 
@@ -148,36 +148,38 @@ def make_boxplots_parametric(df, metric_ls):
     Returns:
     None
     """
-    sns.set_context('notebook')
-    sns.set(rc={'figure.figsize': (4, 3)}, font_scale=1.5)
-    sns.set_style('whitegrid')
-    figure, axes = plt.subplots(1, len(metric_ls), sharex=False, sharey=False, figsize=(28, 8))
+    # sns.set_context('notebook')
+    # sns.set(rc={'figure.figsize': (4, 3)}, font_scale=1.5)
+    # sns.set_style('whitegrid')
+    figure, axes = plt.subplots(2, 3, sharex=False, sharey=False, figsize=figsize)
     # figure, axes = plt.subplots(1, 3, sharex=False, sharey=False, figsize=(16, 8))
 
-    for i, stat in enumerate(metric_ls):
+    for i, (stat, ax) in enumerate(zip(metric_ls, axes.flatten())):
         model = AnovaRM(data=df, depvar=stat, subject='cv_cycle', within=['method']).fit()
         p_value = model.anova_table['Pr > F'].iloc[0]
-        ax = sns.boxplot(y=stat, x="method", hue="method", ax=axes[i], data=df, palette="Set2", legend=False)
+        ax = sns.boxplot(y=stat, x="method", hue="method", ax=ax, data=df, palette="Set2", legend=False)
         title = stat.upper()
-        ax.set_title(f"p={p_value:.1e}")
+        # ax.set_title(f"p={p_value:.1e}")
+        ax.set_title(f"{title} p={p_value:.1e}")
         ax.set_xlabel("")
-        ax.set_ylabel(title)
+        ax.set_ylabel("")
         x_tick_labels = ax.get_xticklabels()
         label_text_list = [x.get_text() for x in x_tick_labels]
         new_xtick_labels = ["\n".join(x.split("_")) for x in label_text_list]
         ax.set_xticks(list(range(0, len(x_tick_labels))))
         ax.set_xticklabels(new_xtick_labels)
     plt.tight_layout()
+    return figure, axes
 
-def make_boxplots_nonparametric(df, metric_ls):
-    sns.set_context('notebook')
-    sns.set(rc={'figure.figsize': (4, 3)}, font_scale=1.5)
-    sns.set_style('whitegrid')
-    figure, axes = plt.subplots(1, 6, sharex=False, sharey=False, figsize=(28, 8))
+def make_boxplots_nonparametric(df, metric_ls, figsize=(28, 8)):
+    # sns.set_context('notebook')
+    # sns.set(rc={'figure.figsize': (4, 3)}, font_scale=1.5)
+    # sns.set_style('whitegrid')
+    figure, axes = plt.subplots(2, 3, sharex=False, sharey=False, figsize=figsize)
 
-    for i, stat in enumerate(metric_ls):
+    for i, (stat, ax) in enumerate(zip(metric_ls, axes.flatten())):
         friedman = pg.friedman(df, dv=stat, within="method", subject="cv_cycle")['p-unc'].values[0]
-        ax = sns.boxplot(y=stat, x="method", hue="method", ax=axes[i], data=df, palette="Set2", legend=False)
+        ax = sns.boxplot(y=stat, x="method", hue="method", ax=ax, data=df, palette="Set2", legend=False)
         title = stat.replace("_", " ").upper()
         ax.set_title(f"p={friedman:.1e}")
         ax.set_xlabel("")
@@ -200,14 +202,14 @@ def make_sign_plots_nonparametric(df, metric_ls):
         sub_ax, sub_c = sp.sign_plot(pc, **heatmap_args, ax=axes[i], xticklabels=True)  # Update xticklabels parameter
         sub_ax.set_title(stat.upper())
 
-def make_critical_difference_diagrams(df, metric_ls):
-    figure, axes = plt.subplots(6, 1, sharex=True, sharey=False, figsize=(16, 10))
-    for i, stat in enumerate(metric_ls):
+def make_critical_difference_diagrams(df, metric_ls, figsize=(16, 10)):
+    figure, axes = plt.subplots(3, 2, sharex=True, sharey=False, figsize=figsize)
+    for i, (stat, ax) in enumerate(zip(metric_ls, axes.flatten())):
         pivot_df = df.pivot(index='cv_cycle', columns='method', values=stat)
         pc = sp.posthoc_conover_friedman(pivot_df, p_adjust="holm")
         avg_rank = df.groupby("cv_cycle")[stat].rank(pct=True).groupby(df.method).mean()
-        sp.critical_difference_diagram(avg_rank, pc, ax=axes[i])
-        axes[i].set_title(stat.upper())
+        sp.critical_difference_diagram(avg_rank, pc, ax=ax)
+        ax.set_title(stat.upper())
     plt.tight_layout()
 
 def make_normality_diagnostic(df, metric_ls):
@@ -226,7 +228,7 @@ def make_normality_diagnostic(df, metric_ls):
     for metric in metric_ls:
         df_norm[metric] = df_norm[metric] - df_norm.groupby("method")[metric].transform("mean")
 
-    df_norm = df_norm.melt(id_vars=["cv_cycle", "method", "split"],
+    df_norm = df_norm.melt(id_vars=["cv_cycle", "method", "split_type"],
                                    value_vars=metric_ls,
                                    var_name="metric",
                                    value_name="value")
@@ -301,7 +303,7 @@ def mcs_plot(pc, effect_size, means, labels=True, cmap=None, cbar_ax_bbox=None,
     else:
         annotations = significance
 
-    hax = sns.heatmap(effect_size, cmap=cmap, annot=annotations, fmt='', cbar=show_cbar, ax=ax,
+    hax = sns.heatmap(effect_size, cmap=cmap, annot=annotations, fmt='', cbar=show_cbar, ax=ax, linewidth=.5,
                       annot_kws={"size": cell_text_size},
                       vmin=-2*vlim if vlim else None, vmax=2*vlim if vlim else None, **kwargs)
 
