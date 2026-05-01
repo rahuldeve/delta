@@ -37,3 +37,6 @@ dependencies = [
 dev = [
     "ruff>=0.12.5",
 ]
+
+[tool.uv]
+exclude-newer = "1 week"
