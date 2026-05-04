@@ -42,14 +42,14 @@ class Encoder(nn.Module, HyperparametersMixin):
             input_dim, output_dim, hidden_dim, n_layers, dropout, activation
         )
 
-        self.ln = nn.LayerNorm(input_dim)
+        self.ln = nn.LayerNorm(output_dim)
 
     def forward(self, H: Tensor, X_d: Tensor | None, alpha: float) -> Tensor:        
         if X_d is None:
             return self.ffn(H)
         else:
-            Z = torch.cat((H, alpha * X_d), dim=1)
-            Z = self.ffn(self.ln(Z))
+            Z = torch.cat((H.detach(), alpha * X_d), dim=1)
+            Z = self.ln(self.ffn(Z))
             return Z + H
 
 
