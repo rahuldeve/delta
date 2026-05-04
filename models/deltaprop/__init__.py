@@ -17,15 +17,17 @@ from ghostml import optimize_threshold_from_predictions
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.utilities import move_data_to_device
+from scipy.special import expit
+from sklearn.isotonic import IsotonicRegression
 from sklearn.preprocessing import StandardScaler
 
 from config import TrainConfig
+from data import GT, DSThreshold
 from misc import set_seeds
 from models.abc import PreparedDatasetSplit, RefModel
 from models.config import DeltapropConfig
-from models.deltaprop.model import DeltaProp, Encoder, Interaction
 from models.deltaprop.data import setup_train_val_dataloaders
-from data import GT, DSThreshold
+from models.deltaprop.model import DeltaProp, Encoder, Interaction
 
 
 def get_molecule_datapoint(row):
@@ -38,7 +40,6 @@ def get_molecule_datapoint(row):
     return MoleculeDatapoint(
         mol=row["mol"], y=np.array([row["cont_target"]]), x_d=feat_array
     )
-
 
 
 # ref: https://docs.pytorch.org/docs/stable/notes/randomness.html
@@ -103,7 +104,6 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             test_split=test_mol_dataset,
             extras=dict(X_d_scaler=X_d_scaler),
         )
-    
 
     @classmethod
     def build(
@@ -113,7 +113,6 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         X_d_scaler: StandardScaler | None,
         **kwargs,
     ) -> "DeltapropRef":
-        
         if X_d_scaler is not None:
             X_d_transform = ScaleTransform.from_standard_scaler(X_d_scaler)
             num_mol_feats = X_d_scaler.n_features_in_
@@ -138,9 +137,11 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             input_dim=ffn_dims,
             hidden_dim=model_config.encoder_hidden_dim,
             output_dim=model_config.encoder_output_dim,
-            activation='elu',
+            activation="elu",
         )
-        interaction = Interaction(encoder.output_dim, dropout=model_config.interaction_dropout)
+        interaction = Interaction(
+            encoder.output_dim, dropout=model_config.interaction_dropout
+        )
 
         X_d_transform = (
             ScaleTransform.from_standard_scaler(X_d_scaler)
@@ -157,7 +158,7 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         )
 
         return DeltapropRef(model)
-    
+
     def train_func(
         self,
         *,
@@ -168,14 +169,13 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         model_config: DeltapropConfig,
         **kwargs,
     ) -> Self:
-        
         set_seeds(train_config.random_seed)
         train_dl, val_dl = setup_train_val_dataloaders(
-            train_mol_ds=train_split, 
-            val_mol_ds=val_split, 
-            binary_threshold=df_classification_threshold, 
-            batch_size=train_config.batch_size, 
-            candidate_size=model_config.candidate_size
+            train_mol_ds=train_split,
+            val_mol_ds=val_split,
+            binary_threshold=df_classification_threshold,
+            batch_size=train_config.batch_size,
+            candidate_size=model_config.candidate_size,
         )
 
         trainer = L.Trainer(
@@ -203,7 +203,6 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             weights_only=False,
         )
         return self
-    
 
     def tune_binary_classification_threshold(
         self,
@@ -216,18 +215,26 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         train_config: TrainConfig,
         **kwargs,
     ) -> float:
-        
         model = self.model
         model.eval()
 
         train_embeds = embed_all(train_split, model)
         val_embeds = embed_all(val_split, model)
 
+        with torch.no_grad():
+            theta_hat_train = (
+                model.interaction.projector(train_embeds).squeeze().cpu()
+            )
+
+            theta_hat_val = (
+                model.interaction.projector(val_embeds).squeeze().cpu()
+            )
+
         if isinstance(df_classification_threshold, GT):
             with torch.no_grad():
                 pred_probs = (
-                    model.interaction(val_embeds, train_embeds)
-                    .sigmoid()
+                    # model.interaction(val_embeds, train_embeds)
+                    torch.sigmoid(theta_hat_val.unsqueeze(1) - theta_hat_train.unsqueeze(0))
                     .squeeze()
                     .cpu()
                     .numpy()
@@ -236,8 +243,8 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         else:
             with torch.no_grad():
                 pred_probs = (
-                    model.interaction(train_embeds, val_embeds)
-                    .sigmoid()
+                    # model.interaction(train_embeds, val_embeds)
+                    torch.sigmoid(theta_hat_train.unsqueeze(1) - theta_hat_val.unsqueeze(0))
                     .squeeze()
                     .cpu()
                     .numpy()
@@ -268,7 +275,6 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         )
 
         return optimal_threshold
-    
 
     def predict_func(
         self,
@@ -278,7 +284,7 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         train_split: MoleculeDataset,
         train_labels: np.typing.NDArray[np.bool],
         test_split: MoleculeDataset,
-        **kwargs
+        **kwargs,
     ):
         model = self.model
         model.eval()
@@ -286,11 +292,20 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         train_embeds = embed_all(train_split, model)
         test_embeds = embed_all(test_split, model, scale_X_d=True)
 
+        with torch.no_grad():
+            theta_hat_train = (
+                model.interaction.projector(train_embeds).squeeze().cpu()
+            )
+
+            theta_hat_test = (
+                model.interaction.projector(test_embeds).squeeze().cpu()
+            )
+
         if isinstance(df_classification_threshold, GT):
             with torch.no_grad():
                 pred_probs = (
-                    model.interaction(test_embeds, train_embeds)
-                    .sigmoid()
+                    # model.interaction(val_embeds, train_embeds)
+                    torch.sigmoid(theta_hat_test.unsqueeze(1) - theta_hat_train.unsqueeze(0))
                     .squeeze()
                     .cpu()
                     .numpy()
@@ -299,8 +314,8 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         else:
             with torch.no_grad():
                 pred_probs = (
-                    model.interaction(train_embeds, test_embeds)
-                    .sigmoid()
+                    # model.interaction(train_embeds, val_embeds)
+                    torch.sigmoid(theta_hat_train.unsqueeze(1) - theta_hat_test.unsqueeze(0))
                     .squeeze()
                     .cpu()
                     .numpy()

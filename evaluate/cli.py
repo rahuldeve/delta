@@ -99,7 +99,7 @@ def baseline(
     return None
 
 
-def deltaprop(
+def deltaprop_btl(
     dataset: SupportedDatasets,
     train_cf: TrainConfig,
     model_cf: DeltapropConfig,
@@ -113,7 +113,7 @@ def deltaprop(
 
         wandb.login(key="cf344975eb80edf6f0d52af80528cc6094234caf")
         tags = set(wandb_cf.tags) | set([
-            'deltaprop', 
+            'deltaprop-btl', 
             dataset.name.lower(), 
             train_cf.split_type,
         ])
@@ -138,7 +138,7 @@ def deltaprop(
     for result_dict, predictions, split in result_iter:
         if isinstance(wandb_cf, WandbEnabled):
             model_name_suffix = wandb_cf.model_name_suffix
-            model_name = "deltaprop" + (f"-{model_name_suffix}" if model_name_suffix else "")
+            model_name = "deltaprop-btl" + (f"-{model_name_suffix}" if model_name_suffix else "")
             wandb.log(  # type: ignore
                 result_dict
                 | asdict(model_cf)
@@ -212,7 +212,7 @@ if __name__ == "__main__":
     tyro.extras.subcommand_cli_from_dict(
         dict(
             baseline=baseline, 
-            deltaprop=deltaprop, 
+            deltaprop_btl=deltaprop_btl, 
             xgboost=xgboost
         )
     )
