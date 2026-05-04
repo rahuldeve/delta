@@ -77,7 +77,29 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
             ]
         )
 
+        self.eps = 1e-8
+        self.log_nu = nn.Parameter(torch.tensor(math.log(0.1)))
         self.loss_fn = nn.BCEWithLogitsLoss()
+
+    # ------------------------------------------------------------------
+    # Stable Davidson logit in log-strength space
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _davidson_logit(lam_i: Tensor, lam_j: Tensor, log_nu: Tensor) -> Tensor:
+        """
+        Logit P(i ≥ j) = δ + log(1 + ν·exp(−δ/2))
+        where δ = λ_i − λ_j.
+
+        Uses log1p for numerical stability when ν·exp(−δ/2) is small,
+        and a large-negative-δ stabilisation to avoid exp overflow.
+        """
+        delta = lam_i - lam_j                          # (...,)
+        # log(1 + ν·exp(−δ/2))  written stably via log-sum-exp trick:
+        #   = log(exp(0) + exp(log_nu − δ/2))  — two-term LSE
+        a = torch.zeros_like(delta)
+        b = log_nu - 0.5 * delta
+        correction = torch.logaddexp(a, b)             # log(1 + ν·exp(−δ/2))
+        return delta + correction
 
     def forward(self, head_emb: Tensor, tail_emb: Tensor):
         if len(head_emb.shape) == 3:
@@ -87,24 +109,25 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
             head_emb = head_emb.squeeze()
             tail_emb = tail_emb.view(B * C, D)
 
-            head_emb = self.projector(head_emb)  # (B, 1)
-            tail_emb = self.projector(tail_emb)  # (B*C, 1)
-            tail_emb = tail_emb.view(B, C)
+            lam_head = self.projector(head_emb)  # (B, 1)
+            lam_tail = self.projector(tail_emb)  # (B*C, 1)
+            lam_tail = lam_tail.view(B, C)
 
-            # print(head_emb.shape, tail_emb.shape)
-            return head_emb - tail_emb
+            
+            return self._davidson_logit(lam_head, lam_tail, self.log_nu)
 
         else:
             H, D = head_emb.shape
             T, _ = tail_emb.shape
 
-            head_emb = self.projector(head_emb)
-            tail_emb = self.projector(tail_emb)
+            lam_head = self.projector(head_emb)
+            lam_tail = self.projector(tail_emb)
 
-            head_emb = head_emb.unsqueeze(1).expand(H, T, 1)
-            tail_emb = tail_emb.unsqueeze(0).expand(H, T, 1)
+            lam_head = lam_head.unsqueeze(1).expand(H, T, 1)
+            lam_tail = lam_tail.unsqueeze(0).expand(H, T, 1)
 
-            return (head_emb - tail_emb).squeeze()
+            
+            return self._davidson_logit(lam_head, lam_tail, self.log_nu).squeeze()
 
     def bidirectional_interaction_loss(
         self, Z_anchor, Z_candidates, target_anchor, target_candidates, B, C
@@ -117,9 +140,8 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
 
         # left to right loss
         interaction = self(Z_anchor, Z_candidates).squeeze()
-        labels = (target_anchor > target_candidates).squeeze()  # type: ignore
+        labels = (target_anchor >= target_candidates).squeeze()  # type: ignore
         loss = self.loss_fn(interaction, labels.float())
-
         return loss
 
 

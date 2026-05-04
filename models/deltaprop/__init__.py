@@ -17,8 +17,6 @@ from ghostml import optimize_threshold_from_predictions
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.utilities import move_data_to_device
-from scipy.special import expit
-from sklearn.isotonic import IsotonicRegression
 from sklearn.preprocessing import StandardScaler
 
 from config import TrainConfig
@@ -223,32 +221,22 @@ class DeltapropRef(RefModel[DeltapropConfig]):
 
         with torch.no_grad():
             theta_hat_train = (
-                model.interaction.projector(train_embeds).squeeze().cpu()
-            )
+                model.interaction.projector(train_embeds).squeeze()
+            ).unsqueeze(0)
 
             theta_hat_val = (
-                model.interaction.projector(val_embeds).squeeze().cpu()
-            )
+                model.interaction.projector(val_embeds).squeeze()
+            ).unsqueeze(1)
 
-        if isinstance(df_classification_threshold, GT):
-            with torch.no_grad():
-                pred_probs = (
-                    # model.interaction(val_embeds, train_embeds)
-                    torch.sigmoid(theta_hat_val.unsqueeze(1) - theta_hat_train.unsqueeze(0))
-                    .squeeze()
-                    .cpu()
-                    .numpy()
-                )
+            if isinstance(df_classification_threshold, GT):
+                pred_probs = model.interaction._davidson_logit(
+                    theta_hat_val, theta_hat_train, model.interaction.log_nu
+                ).sigmoid().squeeze().cpu().numpy()
 
-        else:
-            with torch.no_grad():
-                pred_probs = (
-                    # model.interaction(train_embeds, val_embeds)
-                    torch.sigmoid(theta_hat_train.unsqueeze(1) - theta_hat_val.unsqueeze(0))
-                    .squeeze()
-                    .cpu()
-                    .numpy()
-                ).T
+            else:
+                pred_probs = model.interaction._davidson_logit(
+                    theta_hat_train, theta_hat_val, model.interaction.log_nu
+                ).sigmoid().squeeze().cpu().numpy()
 
         pos_mask = train_labels
         neg_mask = ~pos_mask
@@ -294,32 +282,22 @@ class DeltapropRef(RefModel[DeltapropConfig]):
 
         with torch.no_grad():
             theta_hat_train = (
-                model.interaction.projector(train_embeds).squeeze().cpu()
-            )
+                model.interaction.projector(train_embeds).squeeze()
+            ).unsqueeze(0)
 
             theta_hat_test = (
-                model.interaction.projector(test_embeds).squeeze().cpu()
-            )
+                model.interaction.projector(test_embeds).squeeze()
+            ).unsqueeze(1)
 
-        if isinstance(df_classification_threshold, GT):
-            with torch.no_grad():
-                pred_probs = (
-                    # model.interaction(val_embeds, train_embeds)
-                    torch.sigmoid(theta_hat_test.unsqueeze(1) - theta_hat_train.unsqueeze(0))
-                    .squeeze()
-                    .cpu()
-                    .numpy()
-                )
+            if isinstance(df_classification_threshold, GT):
+                pred_probs = model.interaction._davidson_logit(
+                    theta_hat_test, theta_hat_train, model.interaction.log_nu
+                ).sigmoid().squeeze().cpu().numpy()
 
-        else:
-            with torch.no_grad():
-                pred_probs = (
-                    # model.interaction(train_embeds, val_embeds)
-                    torch.sigmoid(theta_hat_train.unsqueeze(1) - theta_hat_test.unsqueeze(0))
-                    .squeeze()
-                    .cpu()
-                    .numpy()
-                ).T
+            else:
+                pred_probs = model.interaction._davidson_logit(
+                    theta_hat_train, theta_hat_test, model.interaction.log_nu
+                ).sigmoid().squeeze().cpu().numpy()
 
         pos_mask = train_labels
         neg_mask = ~pos_mask

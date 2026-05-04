@@ -62,9 +62,9 @@ class RandomPairDataset(Dataset):
         targets = self.candidate_dataset.Y.squeeze()
         
         if isinstance(self.binary_threshold, GT):
-            exemplar_mask = targets > self.binary_threshold.th
+            exemplar_mask = targets >= self.binary_threshold.th
         elif isinstance(self.binary_threshold, LT):
-            exemplar_mask = targets < self.binary_threshold.th
+            exemplar_mask = targets <= self.binary_threshold.th
         else:
             raise ValueError(self.binary_threshold)
         
