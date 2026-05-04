@@ -234,7 +234,7 @@ class DeltaProp(pl.LightningModule):
         Z = self.encoder(
             H,
             self.X_d_transform(X_d) if X_d is not None else None,
-            self.get_alpha()
+            1.0
         )
         return Z
 
@@ -372,3 +372,5 @@ class DeltaProp(pl.LightningModule):
         model.load_state_dict(state_dict, strict=strict)
 
         return model
+
+

@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 import torch
 from chemprop.data import MoleculeDatapoint, MoleculeDataset
-from chemprop.data.dataloader import collate_batch
 from chemprop.featurizers import SimpleMoleculeMolGraphFeaturizer
 from chemprop.nn import (
     BondMessagePassing,
@@ -16,7 +15,6 @@ from chemprop.nn import (
 from ghostml import optimize_threshold_from_predictions
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
-from pytorch_lightning.utilities import move_data_to_device
 from sklearn.preprocessing import StandardScaler
 
 from config import TrainConfig
@@ -24,8 +22,9 @@ from data import GT, DSThreshold
 from misc import set_seeds
 from models.abc import PreparedDatasetSplit, RefModel
 from models.config import DeltapropConfig
-from models.deltaprop.data import setup_train_val_dataloaders
+from models.deltaprop.data import RandomPairDataModule
 from models.deltaprop.model import DeltaProp, Encoder, Interaction
+from models.deltaprop.utils import embed_all
 
 
 def get_molecule_datapoint(row):
@@ -45,28 +44,6 @@ def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
-
-
-@torch.no_grad()
-def embed_all(mol_dataset: MoleculeDataset, model: DeltaProp, scale_X_d: bool = False):
-    model.eval()
-    if not scale_X_d:
-        model.X_d_transform.train()
-
-    dl = torch.utils.data.DataLoader(
-        mol_dataset,
-        batch_size=64,
-        shuffle=False,
-        collate_fn=collate_batch,
-    )
-    all_embeds = []
-    for batch in dl:
-        batch = move_data_to_device(batch, model.device)
-        res = model.embed_simple_batch(batch)
-        all_embeds.append(res["embeds"])
-
-    all_embeds = torch.cat(all_embeds)
-    return all_embeds
 
 
 class DeltapropRef(RefModel[DeltapropConfig]):
@@ -168,12 +145,13 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         **kwargs,
     ) -> Self:
         set_seeds(train_config.random_seed)
-        train_dl, val_dl = setup_train_val_dataloaders(
-            train_mol_ds=train_split,
+
+        datamodule = RandomPairDataModule(
+            train_mol_ds=train_split, 
             val_mol_ds=val_split,
             binary_threshold=df_classification_threshold,
             batch_size=train_config.batch_size,
-            candidate_size=model_config.candidate_size,
+            n_candidates=model_config.candidate_size,
         )
 
         trainer = L.Trainer(
@@ -184,6 +162,7 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             devices=1,
             max_epochs=train_config.max_epochs,
             num_sanity_val_steps=0,
+            reload_dataloaders_every_n_epochs=2,
             callbacks=[
                 EarlyStopping(
                     monitor="val_loss",
@@ -195,7 +174,7 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             ],
         )
 
-        trainer.fit(self.model, train_dataloaders=train_dl, val_dataloaders=val_dl)
+        trainer.fit(self.model, datamodule=datamodule)
         self.model = DeltaProp.load_from_checkpoint(
             trainer.checkpoint_callback.best_model_path,  # type: ignore
             weights_only=False,
