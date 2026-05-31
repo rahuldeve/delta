@@ -5,7 +5,7 @@ import tyro
 
 from config import TrainConfig, WandbConfig, WandbDisabled, WandbEnabled
 from data import SupportedDatasets
-from models.config import BaselineConfig, DeltapropConfig, XGBoostConfig
+from models.config import ChempropConfig, DeltapropConfig, XGBoostConfig
 
 
 def prepare_dataset(dataset: SupportedDatasets, use_features: bool, drop_nan_features: bool):
@@ -44,21 +44,21 @@ def wandb_log_artifacts(result_dict, predictions, split):
 
 
 
-def baseline(
+def chemprop(
     dataset: SupportedDatasets,
     train_cf: TrainConfig,
-    model_cf: BaselineConfig,
+    model_cf: ChempropConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
 ):
     from evaluate.train import train_and_evaluate
-    from models.baseline import ChempropRef
+    from models.chemprop_bl import ChempropRef
 
     if isinstance(wandb_cf, WandbEnabled):
         import wandb
 
         wandb.login(key="cf344975eb80edf6f0d52af80528cc6094234caf")
         tags = set(wandb_cf.tags) | set([
-            'baseline', 
+            'chemprop', 
             dataset.name.lower(), 
             train_cf.split_type,
         ])
@@ -211,7 +211,7 @@ def xgboost(
 if __name__ == "__main__":
     tyro.extras.subcommand_cli_from_dict(
         dict(
-            baseline=baseline, 
+            chemprop=chemprop, 
             deltaprop_btl=deltaprop_btl, 
             xgboost=xgboost
         )

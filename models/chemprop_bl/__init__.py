@@ -25,7 +25,7 @@ from sklearn.preprocessing import StandardScaler
 from config import TrainConfig
 from misc import set_seeds
 from models.abc import PreparedDatasetSplit, RefModel
-from models.config import BaselineConfig
+from models.config import ChempropConfig
 
 
 def get_molecule_datapoint(row):
@@ -70,7 +70,7 @@ def get_pred_probs(model: MPNN, mol_ds: MoleculeDataset, scale_X_d=False):
     return pred_probs
 
 
-class ChempropRef(RefModel[BaselineConfig]):
+class ChempropRef(RefModel[ChempropConfig]):
     def __init__(self, model: MPNN) -> None:
         self.model = model
 
@@ -108,7 +108,7 @@ class ChempropRef(RefModel[BaselineConfig]):
     def build(
         cls,
         *,
-        model_config: BaselineConfig,
+        model_config: ChempropConfig,
         X_d_scaler: StandardScaler | None,
         **kwargs,
     ) -> "ChempropRef":
