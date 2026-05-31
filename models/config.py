@@ -30,7 +30,7 @@ class DeltapropConfig(ModelConfig):
     encoder_dropout: float = 0.1
     batch_norm: bool = False
     interaction_dropout: float = 0.0
-    candidate_size: int = 16
+    candidate_size: int = 32
     use_chameleon_mp: bool = False
 
 

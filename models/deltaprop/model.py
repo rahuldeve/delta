@@ -42,14 +42,14 @@ class Encoder(nn.Module, HyperparametersMixin):
             input_dim, output_dim, hidden_dim, n_layers, dropout, activation
         )
 
-        self.ln = nn.LayerNorm(input_dim)
+        self.ln = nn.LayerNorm(output_dim)
 
     def forward(self, H: Tensor, X_d: Tensor | None, alpha: float) -> Tensor:        
         if X_d is None:
             return self.ffn(H)
         else:
-            Z = torch.cat((H, alpha * X_d), dim=1)
-            Z = self.ffn(self.ln(Z))
+            Z = torch.cat((H.detach(), alpha * X_d), dim=1)
+            Z = self.ln(self.ffn(Z))
             return Z + H
 
 
@@ -68,15 +68,66 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
         self.save_hyperparameters()
         self.hparams["cls"] = self.__class__
 
-        self.interaction_matrix = torch.nn.Linear(ndims, ndims, bias=False)
-        self.interaction_dropout = torch.nn.Dropout(dropout)
+        self.projector = torch.nn.Sequential(
+            *[
+                torch.nn.Linear(ndims, ndims),
+                torch.nn.ReLU(),
+                torch.nn.Dropout(dropout),
+                torch.nn.Linear(ndims, 1),
+            ]
+        )
 
+        self.eps = 1e-8
+        self.log_nu = nn.Parameter(torch.tensor(math.log(0.1)))
         self.loss_fn = nn.BCEWithLogitsLoss()
 
+    # ------------------------------------------------------------------
+    # Stable Davidson logit in log-strength space
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _davidson_logit(lam_i: Tensor, lam_j: Tensor, log_nu: Tensor) -> Tensor:
+        """
+        Logit P(i ≥ j) = δ + log(1 + ν·exp(−δ/2))
+        where δ = λ_i − λ_j.
+
+        Uses log1p for numerical stability when ν·exp(−δ/2) is small,
+        and a large-negative-δ stabilisation to avoid exp overflow.
+        """
+        delta = lam_i - lam_j                          # (...,)
+        # log(1 + ν·exp(−δ/2))  written stably via log-sum-exp trick:
+        #   = log(exp(0) + exp(log_nu − δ/2))  — two-term LSE
+        a = torch.zeros_like(delta)
+        b = log_nu - 0.5 * delta
+        correction = torch.logaddexp(a, b)             # log(1 + ν·exp(−δ/2))
+        return delta + correction
+
     def forward(self, head_emb: Tensor, tail_emb: Tensor):
-        R = self.interaction_matrix.weight.unsqueeze(0)
-        Z = self.interaction_dropout(head_emb @ R) @ tail_emb.transpose(-2, -1)
-        return Z.squeeze()
+        if len(head_emb.shape) == 3:
+            B, _, D = head_emb.shape
+            _, C, _ = tail_emb.shape
+
+            head_emb = head_emb.squeeze()
+            tail_emb = tail_emb.view(B * C, D)
+
+            lam_head = self.projector(head_emb)  # (B, 1)
+            lam_tail = self.projector(tail_emb)  # (B*C, 1)
+            lam_tail = lam_tail.view(B, C)
+
+            
+            return self._davidson_logit(lam_head, lam_tail, self.log_nu)
+
+        else:
+            H, D = head_emb.shape
+            T, _ = tail_emb.shape
+
+            lam_head = self.projector(head_emb)
+            lam_tail = self.projector(tail_emb)
+
+            lam_head = lam_head.unsqueeze(1).expand(H, T, 1)
+            lam_tail = lam_tail.unsqueeze(0).expand(H, T, 1)
+
+            
+            return self._davidson_logit(lam_head, lam_tail, self.log_nu).squeeze()
 
     def bidirectional_interaction_loss(
         self, Z_anchor, Z_candidates, target_anchor, target_candidates, B, C
@@ -88,16 +139,10 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
         target_candidates = target_candidates.view(B, C)  # type: ignore
 
         # left to right loss
-        lr_interaction = self(Z_anchor, Z_candidates).squeeze()
-        lr_labels = (target_anchor >= target_candidates).squeeze()  # type: ignore
-        lr_loss = self.loss_fn(lr_interaction, lr_labels.float())
-
-        # right to left loss
-        rl_interaction = self(Z_candidates, Z_anchor).squeeze()
-        rl_labels = (target_candidates >= target_anchor).squeeze()  # type: ignore
-        rl_loss = self.loss_fn(rl_interaction, rl_labels.float())
-
-        return lr_loss, rl_loss
+        interaction = self(Z_anchor, Z_candidates).squeeze()
+        labels = (target_anchor >= target_candidates).squeeze()  # type: ignore
+        loss = self.loss_fn(interaction, labels.float())
+        return loss
 
 
 class DeltaProp(pl.LightningModule):
@@ -189,7 +234,7 @@ class DeltaProp(pl.LightningModule):
         Z = self.encoder(
             H,
             self.X_d_transform(X_d) if X_d is not None else None,
-            self.get_alpha()
+            1.0
         )
         return Z
 
@@ -207,12 +252,11 @@ class DeltaProp(pl.LightningModule):
         bmg, V_d, X_d, target_candidates, _, _, _ = batch.candidates
         Z_candidates = self.encoding(bmg, V_d, X_d)
 
-        (lr_loss, rl_loss) = self.interaction.bidirectional_interaction_loss(
+        loss = self.interaction.bidirectional_interaction_loss(
             Z_anchor, Z_candidates, target_anchor, target_candidates, B, C
         )
 
-        loss = (lr_loss + rl_loss) / 2
-        return loss, (lr_loss, rl_loss)
+        return loss
 
     def on_validation_model_eval(self) -> None:
         self.eval()
@@ -221,49 +265,15 @@ class DeltaProp(pl.LightningModule):
         self.X_d_transform.train()
 
     def training_step(self, batch: RandomPairTrainBatch, batch_idx):  # type: ignore
-        loss, (lr_loss, rl_loss) = self.get_losses(batch)
-
-        self.log(
-            "train_lr_loss",
-            lr_loss,
-            batch_size=batch.B,
-            on_epoch=True,
-            enable_graph=True,
-        )
-
-        self.log(
-            "train_rl_loss",
-            rl_loss,
-            batch_size=batch.B,
-            on_epoch=True,
-            enable_graph=True,
-        )
-
+        loss = self.get_losses(batch)
         self.log("train_loss", loss, batch_size=batch.B, prog_bar=True, on_epoch=True)
         return loss
 
     def validation_step(self, batch: RandomPairTrainBatch, batch_idx):  # type: ignore
-        loss, (lr_loss, rl_loss) = self.get_losses(batch)
-
-        self.log(
-            "val_lr_loss",
-            lr_loss,
-            batch_size=batch.B,
-            on_epoch=True,
-            enable_graph=True,
-        )
-
-        self.log(
-            "val_rl_loss",
-            rl_loss,
-            batch_size=batch.B,
-            on_epoch=True,
-            enable_graph=True,
-        )
-
+        loss = self.get_losses(batch)
         self.log("val_loss", loss, batch_size=batch.B, prog_bar=True, on_epoch=True)
         return loss
-
+    
     def configure_optimizers(self):  # type: ignore
         opt = optim.Adam(self.parameters(), self.init_lr)
         if self.trainer.train_dataloader is None:
@@ -362,3 +372,5 @@ class DeltaProp(pl.LightningModule):
         model.load_state_dict(state_dict, strict=strict)
 
         return model
+
+
