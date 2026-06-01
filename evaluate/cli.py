@@ -99,7 +99,7 @@ def chemprop(
     return None
 
 
-def deltaprop_btl(
+def deltaprop(
     dataset: SupportedDatasets,
     train_cf: TrainConfig,
     model_cf: DeltapropConfig,
@@ -212,7 +212,7 @@ if __name__ == "__main__":
     tyro.extras.subcommand_cli_from_dict(
         dict(
             chemprop=chemprop, 
-            deltaprop_btl=deltaprop_btl, 
+            deltaprop=deltaprop, 
             xgboost=xgboost
         )
     )
