@@ -88,8 +88,8 @@ def load_dataset(dataset: SupportedDatasets) -> tuple[pd.DataFrame, DSThreshold]
         df, df_classification_threshold = load_derbyshire_malaria()
     elif dataset == SupportedDatasets.DB_HEPG2:
         df, df_classification_threshold = load_derbyshire_hepg2()
-    elif dataset == SupportedDatasets.DB_HEPG2_SAMPLED:
-        df, df_classification_threshold = load_derbyshire_hepg2()
+    elif dataset == SupportedDatasets.GSK_HEPG2_SAMPLED:
+        df, df_classification_threshold = load_gsk_hepg2_sampled()
     else:
         raise ValueError(dataset)
     
