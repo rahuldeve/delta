@@ -53,6 +53,18 @@ def load_derbyshire_hepg2():
     return df, LT(0.5)
 
 
+def load_derbyshire_hepg2_sampled():
+    df = pd.read_csv("./datasets/Derbyshire_malaria.csv")
+    df = df.sample(frac=0.1).reset_index(drop=True)
+    cols = ["Compound SMILES", "liver % average"]
+    df = df.loc[:, cols]
+    df.columns = ["smiles", "liver_remain_per"]
+
+    df["cont_target"] = df["liver_remain_per"] / 100
+    df["bin_target"] = df["cont_target"] < 0.5
+    return df, LT(0.5)
+
+
 def load_pk():
     df = pd.read_csv("./datasets/PK.csv")
     df = df.loc[:, ["mol", "AUC"]]
@@ -76,6 +88,8 @@ def load_dataset(dataset: SupportedDatasets) -> tuple[pd.DataFrame, DSThreshold]
     elif dataset == SupportedDatasets.DB_MALARIA:
         df, df_classification_threshold = load_derbyshire_malaria()
     elif dataset == SupportedDatasets.DB_HEPG2:
+        df, df_classification_threshold = load_derbyshire_hepg2()
+    elif dataset == SupportedDatasets.DB_HEPG2_SAMPLED:
         df, df_classification_threshold = load_derbyshire_hepg2()
     else:
         raise ValueError(dataset)
