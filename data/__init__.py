@@ -22,4 +22,4 @@ class SupportedDatasets(Enum):
     PK = auto()
     DB_MALARIA = auto()
     DB_HEPG2 = auto()
-    DB_HEPG2_SAMPLED = auto()
+    GSK_HEPG2_SAMPLED = auto()

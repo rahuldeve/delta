@@ -53,16 +53,15 @@ def load_derbyshire_hepg2():
     return df, LT(0.5)
 
 
-def load_derbyshire_hepg2_sampled():
-    df = pd.read_csv("./datasets/Derbyshire_malaria.csv")
+def load_gsk_hepg2_sampled():
+    df = pd.read_csv("./datasets/GSK_HepG2.csv")
     df = df.sample(frac=0.1).reset_index(drop=True)
-    cols = ["Compound SMILES", "liver % average"]
-    df = df.loc[:, cols]
-    df.columns = ["smiles", "liver_remain_per"]
+    df = df.loc[:, ["SMILES", "% inhibition of HepG2 cell line: PCT_INHIB_HEPG2 (%)"]]
+    df.columns = ["smiles", "per_inhibition"]
 
-    df["cont_target"] = df["liver_remain_per"] / 100
-    df["bin_target"] = df["cont_target"] < 0.5
-    return df, LT(0.5)
+    df["cont_target"] = df["per_inhibition"] / 100
+    df["bin_target"] = df["cont_target"] > 0.5
+    return df, GT(0.5)
 
 
 def load_pk():
