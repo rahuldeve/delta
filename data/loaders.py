@@ -55,7 +55,7 @@ def load_derbyshire_hepg2():
 
 def load_gsk_hepg2_sampled():
     df = pd.read_csv("./datasets/GSK_HepG2.csv")
-    df = df.sample(frac=0.1, random_state=42).reset_index(drop=True)
+    df = df.sample(frac=0.5, random_state=42).reset_index(drop=True)
     df = df.loc[:, ["SMILES", "% inhibition of HepG2 cell line: PCT_INHIB_HEPG2 (%)"]]
     df.columns = ["smiles", "per_inhibition"]
 
@@ -88,7 +88,7 @@ def load_dataset(dataset: SupportedDatasets) -> tuple[pd.DataFrame, DSThreshold]
         df, df_classification_threshold = load_derbyshire_malaria()
     elif dataset == SupportedDatasets.DB_HEPG2:
         df, df_classification_threshold = load_derbyshire_hepg2()
-    elif dataset == SupportedDatasets.GSK_HEPG2_SAMPLED:
+    elif dataset == SupportedDatasets.GSK_HEPG2_SAMPLED_HALF:
         df, df_classification_threshold = load_gsk_hepg2_sampled()
     else:
         raise ValueError(dataset)
