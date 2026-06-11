@@ -1,4 +1,5 @@
 import random
+import tempfile
 from typing import Self
 
 import lightning as L
@@ -179,33 +180,39 @@ class ChempropRef(RefModel[ChempropConfig]):
             val_split, batch_size=train_config.batch_size, num_workers=8, shuffle=False
         )
 
-        trainer = L.Trainer(
-            logger=None,
-            enable_checkpointing=True,
-            enable_progress_bar=True,
-            accelerator="auto",
-            devices=1,
-            max_epochs=train_config.max_epochs,
-            num_sanity_val_steps=0,
-            callbacks=[
-                EarlyStopping(
-                    monitor="val_loss",
-                    mode="min",
-                    verbose=True,
-                    patience=train_config.early_stopping_patience,
-                ),
-                ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1),
-            ],
-        )
+        with tempfile.TemporaryDirectory() as ckpt_dir:
+            trainer = L.Trainer(
+                logger=None,
+                enable_checkpointing=True,
+                enable_progress_bar=True,
+                accelerator="auto",
+                devices=1,
+                max_epochs=train_config.max_epochs,
+                num_sanity_val_steps=0,
+                callbacks=[
+                    EarlyStopping(
+                        monitor="val_loss",
+                        mode="min",
+                        verbose=True,
+                        patience=train_config.early_stopping_patience,
+                    ),
+                    ModelCheckpoint(
+                        dirpath=ckpt_dir,
+                        monitor="val_loss",
+                        mode="min",
+                        save_top_k=1,
+                    ),
+                ],
+            )
 
-        trainer.fit(
-            self.model, train_dataloaders=train_loader, val_dataloaders=val_loader
-        )
+            trainer.fit(
+                self.model, train_dataloaders=train_loader, val_dataloaders=val_loader
+            )
 
-        self.model = MPNN.load_from_checkpoint(
-            trainer.checkpoint_callback.best_model_path,  # type: ignore
-            weights_only=False,
-        )
+            self.model = MPNN.load_from_checkpoint(
+                trainer.checkpoint_callback.best_model_path,  # type: ignore
+                weights_only=False,
+            )
 
         return self
 
