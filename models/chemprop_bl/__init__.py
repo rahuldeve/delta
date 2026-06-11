@@ -77,20 +77,14 @@ class ChempropRef(RefModel[ChempropConfig]):
 
     @staticmethod
     def prepare_splits(*, train_df, val_df, test_df):
-        train_df["mol_dp"] = train_df.apply(get_molecule_datapoint, axis=1)
-        val_df["mol_dp"] = val_df.apply(get_molecule_datapoint, axis=1)
-        test_df["mol_dp"] = test_df.apply(get_molecule_datapoint, axis=1)
+        train_dps = train_df.apply(get_molecule_datapoint, axis=1).tolist()
+        val_dps = val_df.apply(get_molecule_datapoint, axis=1).tolist()
+        test_dps = test_df.apply(get_molecule_datapoint, axis=1).tolist()
 
         featurizer = SimpleMoleculeMolGraphFeaturizer()
-        train_mol_dataset = MoleculeDataset(
-            train_df["mol_dp"].tolist(), featurizer=featurizer
-        )
-        val_mol_dataset = MoleculeDataset(
-            val_df["mol_dp"].tolist(), featurizer=featurizer
-        )
-        test_mol_dataset = MoleculeDataset(
-            test_df["mol_dp"].tolist(), featurizer=featurizer
-        )
+        train_mol_dataset = MoleculeDataset(train_dps, featurizer=featurizer)
+        val_mol_dataset = MoleculeDataset(val_dps, featurizer=featurizer)
+        test_mol_dataset = MoleculeDataset(test_dps, featurizer=featurizer)
 
         X_d_scaler = train_mol_dataset.normalize_inputs("X_d")
         val_mol_dataset.normalize_inputs("X_d", X_d_scaler)
