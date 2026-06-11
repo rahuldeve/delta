@@ -29,11 +29,13 @@ def get_group_splitters(random_state, n_outer):
         shuffle=True,  # type: ignore
         random_state=random_state,  # type: ignore
     )
-    # Since StratifiedGroupShuffleSplit does not exist, we can use GroupShuffleSplit for
-    # splitting val and test to get around this issue
-    # ref: https://github.com/scikit-learn/scikit-learn/issues/12076#issuecomment-2047948563
-    inner_spliter = StratifiedKFold(
-        n_splits=int(1 / 0.5), shuffle=True, random_state=random_state
+    # StratifiedGroupShuffleSplit does not exist, so use a 2-fold StratifiedGroupKFold for
+    # the 50/50 val/test split (we take only the first fold). This keeps groups disjoint
+    # across val and test too; plain StratifiedKFold ignores the `groups` arg and would
+    # leak clusters between them. Equivalent to StratifiedGroupShuffleSplit with
+    # test_size=0.5. ref: https://stackoverflow.com/a/79565815
+    inner_spliter = StratifiedGroupKFold(
+        n_splits=2, shuffle=True, random_state=random_state
     )
     return outer_splitter, inner_spliter
 
