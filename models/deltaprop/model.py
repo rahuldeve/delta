@@ -341,7 +341,7 @@ class DeltaProp(pl.LightningModule):
         submodules = {
             k: v
             for k, v in kwargs.items()
-            if k in ["message_passing", "agg", "predictor"]
+            if k in ["message_passing", "agg", "encoder", "interaction"]
         }
         submodules, state_dict, hparams = cls._load(
             checkpoint_path, map_location, **submodules
