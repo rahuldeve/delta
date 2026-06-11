@@ -154,7 +154,7 @@ class RandomPairDataset(Dataset):
         )
         random_pos_candidates = [self.candidate_dataset[idx] for idx in random_pos_class_idxs]
 
-        neg_class_sample_count = min(n_random - pos_class_sample_count, pos_class_idxs.shape[0])
+        neg_class_sample_count = min(n_random - pos_class_sample_count, neg_class_idxs.shape[0])
         random_neg_class_idxs = np.random.choice(
             neg_class_idxs,
             size=(neg_class_sample_count, ),
