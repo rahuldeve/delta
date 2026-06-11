@@ -17,8 +17,10 @@ import json
 import os
 import runpy
 import shlex
+import shutil
 import signal
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -53,23 +55,26 @@ class OrchestratorConfig:
     jobs_file: str
     """Path to a Python file exposing ``JOBS: list[str]`` of evaluate.cli command lines."""
 
-    mem_threshold: float = 0.80
-    """Target GPU memory utilization. New jobs launch only while usage stays under this fraction."""
+    mem_threshold: float = 0.90
+    """Target GPU memory utilization. New jobs launch only while usage stays under this fraction.
+    Tuned for a 24 GB card (RTX 4090): 0.90 still leaves ~2.4 GB of headroom for measurement noise."""
 
-    settle_seconds: float = 600.0
-    """Minimum seconds between launches so a new job allocates GPU memory before we measure headroom."""
+    settle_seconds: float = 180.0
+    """Minimum seconds between launches so a new job allocates GPU memory before we measure headroom.
+    A 4090 ramps fast and has ample headroom, so we pack roughly every 3 min instead of every 10."""
 
     poll_interval: float = 30.0
     """Seconds between scheduler ticks (reap finished jobs, probe GPU, maybe launch)."""
 
     max_concurrent: int = 8
-    """Hard cap on concurrently running subprocesses (guards against CPU oversubscription)."""
+    """Hard cap on concurrently running subprocesses. On a 24 GB card the limiter is usually CPU
+    (each job spawns Ray with num_cpus=4), not VRAM, so this guards against CPU oversubscription."""
 
-    max_cpu_concurrent: int = 1
+    max_cpu_concurrent: int = 2
     """Hard cap on concurrent CPU-only jobs (e.g. xgboost). They predict ~0 GPU so they would
     otherwise always 'fit' and crowd the box; each spawns its own Ray + thread pool."""
 
-    mem_margin_mib: float = 300.0
+    mem_margin_mib: float = 500.0
     """Safety pad added to each job's predicted memory before deciding it fits."""
 
     mem_ema_alpha: float = 0.5
@@ -207,17 +212,25 @@ class Orchestrator:
         self.baseline_used: float = 0.0
         self.total_mib: float = 0.0
         self.peak_used: float = 0.0
+        # Short temp root for per-job Ray instances. Must be short: Ray builds AF_UNIX socket
+        # paths under here and they cannot exceed 107 bytes (run_dir is far too deep to use).
+        self.ray_tmp_root = Path(tempfile.mkdtemp(prefix="orchray_"))
 
     # --- memory model ---------------------------------------------------------
 
-    def predict_mem(self, job: Job) -> float:
-        """Predicted GPU memory (MiB) for a job, including the safety margin."""
+    def predict_mem(self, job: Job) -> float | None:
+        """Predicted GPU memory (MiB) for a job, including the safety margin.
+
+        CPU-only (and unknown/zero-row) jobs predict 0. A GPU job needs a per-row
+        estimate; before any GPU job has settled we have no estimate, so we return None
+        and the scheduler launches a single GPU job at a time to calibrate. (Returning the
+        full budget here would make the first GPU job never fit alongside a non-zero
+        baseline, so only the always-fits CPU jobs would ever launch.)
+        """
         if job.cpu_only or job.rows <= 0:
             return 0.0
         if self.mem_per_row is None:
-            # No calibration yet: assume it could be as large as the whole budget so we
-            # only ever launch one uncalibrated GPU job at a time.
-            return self.total_mib * self.cfg.mem_threshold
+            return None
         return self.mem_per_row * job.rows + self.cfg.mem_margin_mib
 
     def update_mem_per_row(self, job: Job, used_now: float) -> None:
@@ -238,7 +251,9 @@ class Orchestrator:
 
     def launch(self, job: Job, used_now: float) -> None:
         job.log_path = self.run_dir / f"{job.job_id}.log"
-        job_tmp = self.run_dir / f"{job.job_id}_tmp"
+        # Per-job Ray temp dir under the short root (absolute + short to satisfy Ray's
+        # AF_UNIX 107-byte socket-path limit). Keyed by idx to keep it tiny.
+        job_tmp = self.ray_tmp_root / f"j{job.idx}"
         job_tmp.mkdir(exist_ok=True)
         env = os.environ.copy()
         # Isolate each run's Ray instance to avoid temp/port collisions (cli.py ray.init).
@@ -257,9 +272,11 @@ class Orchestrator:
         self.running.append(job)
         self.pending.remove(job)
         self.last_launch_ts = time.time()
+        predicted = self.predict_mem(job)
+        pred_str = f"{predicted:.0f} MiB" if predicted is not None else "uncalibrated"
         print(
             f"[launch] {job.job_id} (rows={job.rows}, "
-            f"predicted={self.predict_mem(job):.0f} MiB) -> {job.log_path}"
+            f"predicted={pred_str}) -> {job.log_path}"
         )
 
     def reap(self) -> None:
@@ -295,17 +312,29 @@ class Orchestrator:
     # --- scheduling -----------------------------------------------------------
 
     def pick_job_that_fits(self, used_now: float) -> Job | None:
-        """Largest pending job whose predicted memory fits under the threshold.
+        """Pick the next job to launch, largest GPU footprint first.
 
-        CPU-only jobs predict ~0 GPU so they always fit; they're additionally gated by
-        ``max_cpu_concurrent`` so they don't crowd the box while the GPU is saturated.
+        GPU jobs are packed largest-first up to the memory threshold. Before any GPU job
+        has settled there's no per-row estimate, so an uncalibrated GPU job launches only
+        when no other GPU job is running -- one at a time -- to measure its footprint
+        rather than blocking forever on an unknown size. CPU-only jobs predict ~0 GPU and
+        fill in around the GPU work, gated by ``max_cpu_concurrent`` so they don't crowd
+        the box (and, crucially, don't monopolise the queue while GPU jobs calibrate).
         """
         cap = self.total_mib * self.cfg.mem_threshold
         running_cpu = sum(1 for j in self.running if j.cpu_only)
+        running_gpu = len(self.running) - running_cpu
         for job in self.pending:  # already largest-first
-            if job.cpu_only and running_cpu >= self.cfg.max_cpu_concurrent:
+            if job.cpu_only:
+                if running_cpu < self.cfg.max_cpu_concurrent:
+                    return job
                 continue
             predicted = self.predict_mem(job)
+            if predicted is None:
+                # Uncalibrated: launch a single GPU job to measure its footprint.
+                if running_gpu == 0:
+                    return job
+                continue
             if used_now + predicted <= cap:
                 return job
         return None
@@ -355,6 +384,7 @@ class Orchestrator:
             self._terminate_all()
         finally:
             self._write_summary()
+            shutil.rmtree(self.ray_tmp_root, ignore_errors=True)
 
     def _terminate_all(self) -> None:
         for job in self.running:
@@ -441,7 +471,7 @@ def main(cfg: OrchestratorConfig) -> None:
         raise SystemExit(f"Could not query GPU via nvidia-smi: {exc}")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = Path(cfg.log_dir) / timestamp
+    run_dir = (Path(cfg.log_dir) / timestamp).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     print(f"Run directory: {run_dir}\n")
 
