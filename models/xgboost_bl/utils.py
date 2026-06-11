@@ -20,20 +20,23 @@ class CorrelationThreshold(SelectorMixin, BaseEstimator):
         self.threshold = threshold
 
     def fit(self, X, y=None):
-        corr_matrix = X.corr().abs()
-        upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-        # True for preserved columns, False for dropped columns
-        self.mask_ = np.array(
-            [not any(upper[column] > self.threshold) for column in upper.columns]
-        )
-
-        X = validate_data(  # type: ignore
+        # validate first so the mask is derived from the same frame (and column
+        # order) that transform will see at predict time
+        validate_data(  # type: ignore
             self,
             X=X,
             accept_sparse=("csr", "csc"),
             dtype=float,
             ensure_all_finite="allow-nan",
         )
+
+        corr_matrix = X.corr().abs()
+        upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+        # True for preserved columns, False for dropped columns
+        self.mask_ = np.array(
+            [not any(upper[column] > self.threshold) for column in upper.columns]
+        )
+        assert self.mask_.shape[0] == self.n_features_in_  # type: ignore
 
         return self
 
