@@ -46,7 +46,10 @@ class XGBoostRef(RefModel[XGBoostConfig]):
         ).set_output(transform="pandas")
 
         model = xgb.XGBClassifier(
-            early_stopping_rounds=200, random_state=model_config.random_state, verbosity=0
+            n_estimators=2000,
+            early_stopping_rounds=50,
+            random_state=model_config.random_state,
+            verbosity=0,
         )
         return XGBoostRef(model, feature_pipeline)
 
