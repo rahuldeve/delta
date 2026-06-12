@@ -19,13 +19,13 @@ from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
 from sklearn.preprocessing import StandardScaler
 
 from config import TrainConfig
-from data import GT, DSThreshold
+from data import DSThreshold
 from misc import set_seeds
 from models.abc import PreparedDatasetSplit, RefModel
 from models.config import DeltapropConfig
 from models.deltaprop.data import RandomPairDataModule
 from models.deltaprop.model import DeltaProp, Encoder, Interaction
-from models.deltaprop.utils import embed_all
+from models.deltaprop.utils import class_mean_probs, embed_all
 
 
 def get_molecule_datapoint(row):
@@ -199,40 +199,13 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         train_embeds = embed_all(train_split, model)
         val_embeds = embed_all(val_split, model)
 
-        with torch.no_grad():
-            theta_hat_train = (
-                model.interaction.projector(train_embeds).squeeze()
-            ).unsqueeze(0)
-
-            theta_hat_val = (
-                model.interaction.projector(val_embeds).squeeze()
-            ).unsqueeze(1)
-
-            if isinstance(df_classification_threshold, GT):
-                pred_probs = model.interaction._davidson_logit(
-                    theta_hat_val, theta_hat_train, model.interaction.log_nu
-                ).sigmoid().squeeze().cpu().numpy()
-
-            else:
-                pred_probs = model.interaction._davidson_logit(
-                    theta_hat_train, theta_hat_val, model.interaction.log_nu
-                ).sigmoid().squeeze().cpu().numpy()
-
-        pos_mask = train_labels
-        neg_mask = ~pos_mask
-
-        pos_contrib = pred_probs[:, pos_mask]
-        neg_contrib = pred_probs[:, neg_mask]
-        if pos_contrib.shape[-1] == 0:
-            pred_probs = neg_contrib.mean(axis=-1)
-
-        elif neg_contrib.shape[-1] == 0:
-            pred_probs = pos_contrib.mean(axis=-1)
-
-        else:
-            pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
-            neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
-            pred_probs = (pos_contrib + neg_contrib) / 2
+        pred_probs = class_mean_probs(
+            model,
+            train_embeds,
+            val_embeds,
+            train_labels,
+            df_classification_threshold,
+        )
 
         thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
         optimal_threshold = optimize_threshold_from_predictions(
@@ -260,40 +233,13 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         train_embeds = embed_all(train_split, model)
         test_embeds = embed_all(test_split, model, scale_X_d=True)
 
-        with torch.no_grad():
-            theta_hat_train = (
-                model.interaction.projector(train_embeds).squeeze()
-            ).unsqueeze(0)
-
-            theta_hat_test = (
-                model.interaction.projector(test_embeds).squeeze()
-            ).unsqueeze(1)
-
-            if isinstance(df_classification_threshold, GT):
-                pred_probs = model.interaction._davidson_logit(
-                    theta_hat_test, theta_hat_train, model.interaction.log_nu
-                ).sigmoid().squeeze().cpu().numpy()
-
-            else:
-                pred_probs = model.interaction._davidson_logit(
-                    theta_hat_train, theta_hat_test, model.interaction.log_nu
-                ).sigmoid().squeeze().cpu().numpy()
-
-        pos_mask = train_labels
-        neg_mask = ~pos_mask
-        
-        pos_contrib = pred_probs[:, pos_mask]
-        neg_contrib = pred_probs[:, neg_mask]
-        if pos_contrib.shape[-1] == 0:
-            pred_probs = neg_contrib.mean(axis=-1)
-
-        elif neg_contrib.shape[-1] == 0:
-            pred_probs = pos_contrib.mean(axis=-1)
-
-        else:
-            pos_contrib = pred_probs[:, pos_mask].mean(axis=-1)
-            neg_contrib = pred_probs[:, neg_mask].mean(axis=-1)
-            pred_probs = (pos_contrib + neg_contrib) / 2
+        pred_probs = class_mean_probs(
+            model,
+            train_embeds,
+            test_embeds,
+            train_labels,
+            df_classification_threshold,
+        )
 
         preds = (pred_probs >= binary_classification_threshold).astype(float)
 
