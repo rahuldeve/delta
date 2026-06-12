@@ -129,7 +129,7 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
             
             return self._davidson_logit(lam_head, lam_tail, self.log_nu).squeeze()
 
-    def bidirectional_interaction_loss(
+    def interaction_loss(
         self, Z_anchor, Z_candidates, target_anchor, target_candidates, B, C
     ):
         Z_anchor = Z_anchor.view(B, 1, -1)  # (B, d) -> (B, 1, d)
@@ -194,28 +194,6 @@ class DeltaProp(pl.LightningModule):
 
         self.loss_fn = nn.BCEWithLogitsLoss()
 
-    def get_alpha(self) -> float:
-        alpha_min = 1e-3
-        alpha_max = 5e-2
-        warmup_start = 0.35  # fraction of training
-        warmup_end = 0.85
-
-        if self._trainer is None:
-            return alpha_max
-
-        current_epoch = self.trainer.current_epoch
-        max_epochs = self.trainer.max_epochs
-
-        progress = current_epoch / max_epochs
-
-        if progress <= warmup_start:
-            return alpha_min
-        if progress >= warmup_end:
-            return alpha_max
-
-        t = (progress - warmup_start) / (warmup_end - warmup_start)
-        return alpha_min + (alpha_max - alpha_min) * (1 - math.cos(math.pi * t)) / 2
-
     # def fingerprint(
     #     self, bmg: BatchMolGraph, V_d: Tensor | None = None, X_d: Tensor | None = None
     # ) -> Tensor:
@@ -252,7 +230,7 @@ class DeltaProp(pl.LightningModule):
         bmg, V_d, X_d, target_candidates, _, _, _ = batch.candidates
         Z_candidates = self.encoding(bmg, V_d, X_d)
 
-        loss = self.interaction.bidirectional_interaction_loss(
+        loss = self.interaction.interaction_loss(
             Z_anchor, Z_candidates, target_anchor, target_candidates, B, C
         )
 
