@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import runpy
 import shlex
 import shutil
@@ -47,6 +48,14 @@ UNKNOWN_DATASET_ROWS = 0
 # Models that don't touch the GPU; their predicted GPU footprint is ~0.
 CPU_ONLY_MODELS = {"xgboost"}
 
+# CLI model token -> the tag evaluate.cli stamps on its wandb run. Note the mapping isn't
+# identity: deltaprop runs are tagged "deltaprop-btlh2" (see evaluate/cli.py).
+MODEL_WANDB_TAG = {
+    "chemprop": "chemprop",
+    "deltaprop": "deltaprop-btlh2",
+    "xgboost": "xgboost",
+}
+
 
 @dataclass
 class OrchestratorConfig:
@@ -55,9 +64,10 @@ class OrchestratorConfig:
     jobs_file: str
     """Path to a Python file exposing ``JOBS: list[str]`` of evaluate.cli command lines."""
 
-    mem_threshold: float = 0.90
+    mem_threshold: float = 0.70
     """Target GPU memory utilization. New jobs launch only while usage stays under this fraction.
-    Tuned for a 24 GB card (RTX 4090): 0.90 still leaves ~2.4 GB of headroom for measurement noise."""
+    Kept well below 1.0 because a job's footprint can swing ~30% up after it's packed (variable
+    batch shapes, pairwise sampling); on a 24 GB card 0.70 leaves ~7 GB to absorb those spikes."""
 
     settle_seconds: float = 180.0
     """Minimum seconds between launches so a new job allocates GPU memory before we measure headroom.
@@ -83,6 +93,18 @@ class OrchestratorConfig:
     log_dir: str = "orchestrator_runs"
     """Parent directory for per-run log folders."""
 
+    reconcile_wandb: bool = True
+    """Wandb is the source of truth for what's done: before launching, fetch wandb runs and skip
+    any job whose run is ``finished``. Only ``finished`` counts -- ``preempted``/``preempting`` are
+    treated as not done and re-run. Disable to force a full re-run (nothing is skipped). If wandb is
+    unreachable this warns and runs everything rather than guessing."""
+
+    wandb_entity: str | None = None
+    """Wandb entity to query for reconciliation. Defaults to the API's default entity."""
+
+    random_seed: int | None = None
+    """Seed for the randomized job selection. Set for reproducible launch orders."""
+
     dry_run: bool = False
     """Print the size-sorted launch order and exit without running anything."""
 
@@ -97,9 +119,12 @@ class Job:
     dataset: str | None
     rows: int
     cpu_only: bool
+    model: str | None = None
+    split: str = "butina"  # evaluate.cli default split is BUTINA
+    use_feats: bool = False
 
     # Runtime state.
-    status: str = "pending"  # pending | running | done | failed
+    status: str = "pending"  # pending | running | done | failed | skipped
     proc: subprocess.Popen | None = field(default=None, repr=False)
     log_path: Path | None = None
     returncode: int | None = None
@@ -144,6 +169,36 @@ def extract_model(argv: list[str]) -> str | None:
     return None
 
 
+def extract_split(argv: list[str]) -> str:
+    """Return the ``--train-cf.split-type`` value (lowercased), defaulting to butina."""
+    for i, tok in enumerate(argv):
+        if tok == "--train-cf.split-type" and i + 1 < len(argv):
+            return argv[i + 1].lower()
+        if tok.startswith("--train-cf.split-type="):
+            return tok.split("=", 1)[1].lower()
+    return "butina"
+
+
+def extract_use_feats(argv: list[str]) -> bool:
+    """Whether ``--train-cf.use-feats`` is set (tyro boolean flag)."""
+    for tok in argv:
+        if tok in ("--train-cf.use-feats", "--train-cf.use_feats"):
+            return True
+        if tok.startswith(("--train-cf.use-feats=", "--train-cf.use_feats=")):
+            return tok.split("=", 1)[1].lower() in ("true", "1", "yes")
+    return False
+
+
+def extract_wandb_project(argv: list[str]) -> str | None:
+    """Return the ``--wandb-cf.project-name`` value in argv, if present."""
+    for i, tok in enumerate(argv):
+        if tok == "--wandb-cf.project-name" and i + 1 < len(argv):
+            return argv[i + 1]
+        if tok.startswith("--wandb-cf.project-name="):
+            return tok.split("=", 1)[1]
+    return None
+
+
 def build_jobs(commands: list[str]) -> list[Job]:
     """Parse command strings into Jobs sorted by dataset size, largest first."""
     jobs: list[Job] = []
@@ -165,6 +220,9 @@ def build_jobs(commands: list[str]) -> list[Job]:
                 dataset=dataset,
                 rows=rows,
                 cpu_only=cpu_only,
+                model=model,
+                split=extract_split(argv),
+                use_feats=extract_use_feats(argv),
             )
         )
     # Largest dataset first; stable on original order for ties.
@@ -200,14 +258,66 @@ def gpu_mem() -> tuple[float, float]:
     return float(used_str), float(total_str)
 
 
+def fetch_finished_wandb(
+    projects: list[str], entity: str | None
+) -> list[frozenset[str]]:
+    """Tag sets of every wandb run in ``state == 'finished'`` across the given projects.
+
+    Only ``finished`` runs count as complete; ``preempted``/``preempting`` (every run here
+    calls ``mark_preempting()``) are deliberately excluded so partial work gets re-run.
+    """
+    import wandb
+
+    api = wandb.Api()
+    ent = entity or api.default_entity
+    finished: list[frozenset[str]] = []
+    for project in projects:
+        for run in api.runs(f"{ent}/{project}"):
+            if run.state == "finished":
+                finished.append(frozenset(run.tags))
+    return finished
+
+
+def job_finished_on_wandb(job: Job, finished_tag_sets: list[frozenset[str]]) -> bool:
+    """True if some finished wandb run matches this job's (model, dataset, split, feats)."""
+    model_tag = MODEL_WANDB_TAG.get(job.model or "")
+    if model_tag is None or job.dataset is None:
+        return False
+    want = {model_tag, job.dataset.lower(), job.split.lower()}
+    for tags in finished_tag_sets:
+        # feats is a separate experiment: require an exact match on the with-feats tag.
+        if want <= tags and (("with-feats" in tags) == job.use_feats):
+            return True
+    return False
+
+
+def mark_finished_jobs(
+    jobs: list[Job], finished_tag_sets: list[frozenset[str]]
+) -> None:
+    """Mark jobs whose wandb run is ``finished`` as ``skipped`` (wandb is the source of truth)."""
+    for job in jobs:
+        if job_finished_on_wandb(job, finished_tag_sets):
+            job.status = "skipped"
+
+
 class Orchestrator:
-    def __init__(self, cfg: OrchestratorConfig, jobs: list[Job], run_dir: Path):
+    def __init__(
+        self,
+        cfg: OrchestratorConfig,
+        jobs: list[Job],
+        run_dir: Path,
+    ):
         self.cfg = cfg
         self.jobs = jobs
         self.run_dir = run_dir
-        self.pending = list(jobs)  # already size-sorted
+        # Already-complete jobs were marked "skipped" upstream; only queue the rest.
+        self.pending = [j for j in jobs if j.status == "pending"]  # already size-sorted
         self.running: list[Job] = []
         self.mem_per_row: float | None = None
+        # Row count of the job that last calibrated mem_per_row. The per-row model has no
+        # intercept, so we only ever (re)calibrate from the largest job seen -- a small one
+        # would inflate per-row and make big jobs look unschedulable. 0 = uncalibrated.
+        self.calib_rows: int = 0
         self.last_launch_ts: float = 0.0
         self.baseline_used: float = 0.0
         self.total_mib: float = 0.0
@@ -215,6 +325,8 @@ class Orchestrator:
         # Short temp root for per-job Ray instances. Must be short: Ray builds AF_UNIX socket
         # paths under here and they cannot exceed 107 bytes (run_dir is far too deep to use).
         self.ray_tmp_root = Path(tempfile.mkdtemp(prefix="orchray_"))
+        if cfg.random_seed is not None:
+            random.seed(cfg.random_seed)
 
     # --- memory model ---------------------------------------------------------
 
@@ -234,8 +346,17 @@ class Orchestrator:
         return self.mem_per_row * job.rows + self.cfg.mem_margin_mib
 
     def update_mem_per_row(self, job: Job, used_now: float) -> None:
-        """Refine the per-row estimate from a settled launch's observed memory delta."""
+        """Refine the per-row estimate from a settled launch's observed memory delta.
+
+        Only (re)calibrate from the largest job seen so far. The per-row model has no
+        intercept, so a small job (fixed CUDA/model overhead spread over few rows) yields a
+        hugely inflated per-row that would make big jobs look unschedulable. Anchoring on the
+        largest keeps the estimate representative for heavy jobs and merely conservative
+        (padded by ``mem_margin_mib``) for the light ones.
+        """
         if job.cpu_only or job.rows <= 0 or job.used_before_launch_mib is None:
+            return
+        if self.mem_per_row is not None and job.rows < self.calib_rows:
             return
         delta = used_now - job.used_before_launch_mib
         if delta <= 0:
@@ -246,6 +367,7 @@ class Orchestrator:
         else:
             a = self.cfg.mem_ema_alpha
             self.mem_per_row = a * observed + (1 - a) * self.mem_per_row
+        self.calib_rows = job.rows
 
     # --- subprocess lifecycle -------------------------------------------------
 
@@ -312,32 +434,45 @@ class Orchestrator:
     # --- scheduling -----------------------------------------------------------
 
     def pick_job_that_fits(self, used_now: float) -> Job | None:
-        """Pick the next job to launch, largest GPU footprint first.
+        """Pick a job to launch from those that currently fit, chosen at random.
 
-        GPU jobs are packed largest-first up to the memory threshold. Before any GPU job
-        has settled there's no per-row estimate, so an uncalibrated GPU job launches only
-        when no other GPU job is running -- one at a time -- to measure its footprint
-        rather than blocking forever on an unknown size. CPU-only jobs predict ~0 GPU and
-        fill in around the GPU work, gated by ``max_cpu_concurrent`` so they don't crowd
-        the box (and, crucially, don't monopolise the queue while GPU jobs calibrate).
+        Eligibility respects every safety gate: the GPU memory budget, the CPU-only cap,
+        and the one-uncalibrated-GPU-job-at-a-time rule. Among the eligible jobs we choose
+        *randomly* rather than strictly largest-first, so one heavy dataset (e.g. GSK_HEPG2,
+        which contributes many same-size jobs) doesn't monopolise every launch slot.
+
+        The one exception is the very first GPU calibration: while ``mem_per_row`` is still
+        unknown we deterministically pick the *largest* eligible GPU job, because the
+        intercept-free per-row model must be anchored on a big job (see ``update_mem_per_row``).
         """
         cap = self.total_mib * self.cfg.mem_threshold
         running_cpu = sum(1 for j in self.running if j.cpu_only)
         running_gpu = len(self.running) - running_cpu
-        for job in self.pending:  # already largest-first
+
+        candidates: list[Job] = []
+        for job in self.pending:
             if job.cpu_only:
                 if running_cpu < self.cfg.max_cpu_concurrent:
-                    return job
+                    candidates.append(job)
                 continue
             predicted = self.predict_mem(job)
             if predicted is None:
-                # Uncalibrated: launch a single GPU job to measure its footprint.
+                # Uncalibrated GPU job: only one at a time, to measure its footprint.
                 if running_gpu == 0:
-                    return job
+                    candidates.append(job)
                 continue
             if used_now + predicted <= cap:
-                return job
-        return None
+                candidates.append(job)
+
+        if not candidates:
+            return None
+
+        # Anchor the first calibration on the largest GPU job; randomise everything else.
+        if self.mem_per_row is None:
+            gpu_uncalibrated = [j for j in candidates if not j.cpu_only]
+            if gpu_uncalibrated:
+                return max(gpu_uncalibrated, key=lambda j: j.rows)
+        return random.choice(candidates)
 
     def run(self) -> None:
         self.baseline_used, self.total_mib = gpu_mem()
@@ -403,14 +538,14 @@ class Orchestrator:
             job.returncode = job.proc.returncode
 
     def _print_status(self, used_now: float) -> None:
-        counts = {s: 0 for s in ("pending", "running", "done", "failed")}
+        counts = {s: 0 for s in ("pending", "running", "done", "failed", "skipped")}
         for job in self.jobs:
             counts[job.status] += 1
         mpr = f"{self.mem_per_row:.3f}" if self.mem_per_row is not None else "n/a"
         print(
             f"[status] GPU {used_now:.0f}/{self.total_mib:.0f} MiB | "
             f"mem/row={mpr} | running={counts['running']} pending={counts['pending']} "
-            f"done={counts['done']} failed={counts['failed']}"
+            f"done={counts['done']} failed={counts['failed']} skipped={counts['skipped']}"
         )
 
     def _write_summary(self) -> None:
@@ -448,17 +583,61 @@ class Orchestrator:
 
 def print_dry_run(jobs: list[Job]) -> None:
     print("Dry run — launch order (largest dataset first):\n")
-    for pos, job in enumerate(jobs, 1):
+    pos = 0
+    for job in jobs:
         ds = job.dataset or "unknown"
+        if job.status == "skipped":
+            print(
+                f"   -- {job.job_id:<28} rows={job.rows:<6} {ds} [skip: already done]"
+            )
+            continue
+        pos += 1
         tag = " [cpu-only]" if job.cpu_only else ""
-        print(f"  {pos:>2}. {job.job_id:<28} rows={job.rows:<6} {ds}{tag}")
+        feat = " [feats]" if job.use_feats else ""
+        print(f"  {pos:>2}. {job.job_id:<28} rows={job.rows:<6} {ds}{tag}{feat}")
         print(f"      {job.command}")
     print("\nNo processes were launched (dry run).")
+
+
+def reconcile_with_wandb(jobs: list[Job], cfg: OrchestratorConfig) -> None:
+    """Mark jobs already ``finished`` on wandb as skipped. Wandb is the source of truth."""
+    finished_tag_sets: list[frozenset[str]] = []
+    if cfg.reconcile_wandb:
+        projects = sorted({p for j in jobs if (p := extract_wandb_project(j.argv))})
+        if projects:
+            try:
+                finished_tag_sets = fetch_finished_wandb(projects, cfg.wandb_entity)
+                print(
+                    f"Reconciled {len(finished_tag_sets)} finished wandb run(s) "
+                    f"across {len(projects)} project(s): {', '.join(projects)}"
+                )
+            except Exception as exc:  # noqa: BLE001 - network/auth/import all degrade alike
+                print(
+                    f"[warn] wandb reconciliation failed ({exc}); "
+                    "running all jobs (nothing skipped)."
+                )
+
+    mark_finished_jobs(jobs, finished_tag_sets)
+
+    done = [j for j in jobs if j.status == "skipped"]
+    runnable = sum(1 for j in jobs if j.status == "pending")
+    if done:
+        print(f"\nAlready completed on wandb ({len(done)}) — skipping:")
+        for job in sorted(done, key=lambda j: j.idx):
+            ds = job.dataset or "unknown"
+            feat = "feats" if job.use_feats else "no-feats"
+            print(
+                f"  ✓ {job.job_id:<28} "
+                f"{job.model or '?':<10} {ds:<18} {job.split:<8} {feat}"
+            )
+    print(f"\n{len(done)} already finished on wandb (skipped); {runnable} to run.\n")
 
 
 def main(cfg: OrchestratorConfig) -> None:
     commands = load_jobs_file(cfg.jobs_file)
     jobs = build_jobs(commands)
+
+    reconcile_with_wandb(jobs, cfg)
 
     if cfg.dry_run:
         print_dry_run(jobs)
