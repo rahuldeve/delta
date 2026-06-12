@@ -26,7 +26,7 @@ class WandbDisabled:
 
 @dataclass
 class WandbEnabled:
-    project_name: str = "evaluate_tba"
+    project_name: str
     tags: list[str] = field(default_factory=list)
     model_name_suffix: str|None = None
 
