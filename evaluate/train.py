@@ -130,7 +130,7 @@ def train_and_evaluate_split(
         df_classification_threshold=df_classification_threshold,
     )
 
-    pred_probs, preds = model.predict_func(
+    test_pred_probs, test_preds = model.predict_func(
         binary_classification_threshold=clf_th,
         train_split=train_split,
         train_labels=train_df["bin_target"],
@@ -138,7 +138,35 @@ def train_and_evaluate_split(
         df_classification_threshold=df_classification_threshold,
     )
 
-    return calc_metrics(pred_probs, preds, test_df["bin_target"]), (pred_probs, preds)
+    # val features (X_d) are already normalized in-place in prepare_splits, so
+    # flag the split as prescaled to avoid double-scaling at inference.
+    val_pred_probs, val_preds = model.predict_func(
+        binary_classification_threshold=clf_th,
+        train_split=train_split,
+        train_labels=train_df["bin_target"],
+        test_split=val_split,
+        df_classification_threshold=df_classification_threshold,
+        split_X_d_prescaled=True,
+    )
+
+    test_metrics = {
+        f"test_{k}": v
+        for k, v in calc_metrics(
+            test_pred_probs, test_preds, test_df["bin_target"]
+        ).items()
+    }
+    val_metrics = {
+        f"val_{k}": v
+        for k, v in calc_metrics(
+            val_pred_probs, val_preds, val_df["bin_target"]
+        ).items()
+    }
+
+    predictions = {
+        "test": (test_pred_probs, test_preds),
+        "val": (val_pred_probs, val_preds),
+    }
+    return test_metrics | val_metrics, predictions
 
 
 def train_and_evaluate(

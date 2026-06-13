@@ -77,8 +77,17 @@ def ablation_log_artifacts(fraction, model_name, predictions, split):
     )
 
     with artifact.new_file("predictions.pkl", mode="wb") as f:
-        pred_probs, preds = predictions
-        pickle.dump({"pred_probs": pred_probs, "preds": preds}, f)
+        test_pred_probs, test_preds = predictions["test"]
+        val_pred_probs, val_preds = predictions["val"]
+        pickle.dump(
+            {
+                "test_pred_probs": test_pred_probs,
+                "test_preds": test_preds,
+                "val_pred_probs": val_pred_probs,
+                "val_preds": val_preds,
+            },
+            f,
+        )
 
     with artifact.new_file("split.pkl", mode="wb") as f:
         train_df, val_df, test_df = split

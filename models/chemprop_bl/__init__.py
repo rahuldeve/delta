@@ -235,8 +235,14 @@ class ChempropRef(RefModel[ChempropConfig]):
         *,
         test_split: MoleculeDataset,
         binary_classification_threshold: float,
+        split_X_d_prescaled: bool = False,
         **kwargs,
     ) -> tuple[np.ndarray, np.ndarray]:
-        pred_probs = get_pred_probs(self.model, test_split, scale_X_d=True)
+        # `split_X_d_prescaled` marks a split whose X_d was already normalized
+        # in-place in prepare_splits (train/val). For those we must NOT let the
+        # model's X_d_transform scale again, or features get double-scaled.
+        pred_probs = get_pred_probs(
+            self.model, test_split, scale_X_d=not split_X_d_prescaled
+        )
         preds = (pred_probs >= binary_classification_threshold).astype(float)
         return pred_probs, preds

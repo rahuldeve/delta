@@ -225,13 +225,20 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         train_split: MoleculeDataset,
         train_labels: np.typing.NDArray[np.bool],
         test_split: MoleculeDataset,
+        split_X_d_prescaled: bool = False,
         **kwargs,
     ):
         model = self.model
         model.eval()
 
+        # train is the reference set and is always pre-scaled in-place
+        # (scale_X_d=False). The scored split (`test_split`) is raw for the test
+        # set but pre-scaled for the val set; `split_X_d_prescaled` avoids
+        # double-scaling its features.
         train_embeds = embed_all(train_split, model)
-        test_embeds = embed_all(test_split, model, scale_X_d=True)
+        test_embeds = embed_all(
+            test_split, model, scale_X_d=not split_X_d_prescaled
+        )
 
         pred_probs = class_mean_probs(
             model,
