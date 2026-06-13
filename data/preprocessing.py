@@ -112,6 +112,12 @@ def preprocess_ray(df, use_features, drop_nan_features):
     # use_features=True vs use_features=False. For now we are dropping any features which has atleast one NaN
     assert "smiles" in set(df.columns)
 
+    # Ray Data defaults to preserve_order=False, so .map(...).to_pandas() returns rows
+    # in task-completion order, which varies across processes/runs. Downstream splits
+    # index by position into this df, so a stable order is required for reproducible
+    # cross-process 5xn splits.
+    ray.data.DataContext.get_current().execution_options.preserve_order = True
+
     df = (
         ray.data.from_pandas(df, override_num_blocks=len(df) // 64)
         .map(lambda row: row | preprocess_row(row, generate_features=use_features))
