@@ -69,7 +69,7 @@ class OrchestratorConfig:
     Kept well below 1.0 because a job's footprint can swing ~30% up after it's packed (variable
     batch shapes, pairwise sampling); on a 24 GB card 0.70 leaves ~7 GB to absorb those spikes."""
 
-    settle_seconds: float = 180.0
+    settle_seconds: float = 5 * 60
     """Minimum seconds between launches so a new job allocates GPU memory before we measure headroom.
     A 4090 ramps fast and has ample headroom, so we pack roughly every 3 min instead of every 10."""
 
@@ -89,6 +89,13 @@ class OrchestratorConfig:
 
     mem_ema_alpha: float = 0.5
     """EMA weight for updating the per-row memory estimate from each observed launch."""
+
+    max_retries: int = 2
+    """How many times to re-queue a job after it fails (so up to ``max_retries + 1`` total
+    launches). A failed job goes back to ``pending`` and is re-scheduled on a freshly chosen
+    GPU once headroom allows -- this recovers transient OOMs caused by over-packing (the most
+    common failure here), at the cost of repeating genuinely broken jobs a couple of times.
+    Set to 0 to disable retries."""
 
     log_dir: str = "orchestrator_runs"
     """Parent directory for per-run log folders."""
@@ -138,6 +145,7 @@ class Job:
     used_before_launch_mib: float | None = None
     # Physical GPU index this job was pinned to (None for cpu-only jobs).
     gpu: int | None = None
+    attempts: int = 0  # number of times this job has been launched (for retry tracking)
 
     @property
     def job_id(self) -> str:
@@ -398,7 +406,10 @@ class Orchestrator:
     # --- subprocess lifecycle -------------------------------------------------
 
     def launch(self, job: Job, gpu: int | None, used_now: float) -> None:
-        job.log_path = self.run_dir / f"{job.job_id}.log"
+        job.attempts += 1
+        # Suffix retry logs so a failed attempt's output isn't overwritten by the next try.
+        suffix = "" if job.attempts == 1 else f".try{job.attempts}"
+        job.log_path = self.run_dir / f"{job.job_id}{suffix}.log"
         # Per-job Ray temp dir under the short root (absolute + short to satisfy Ray's
         # AF_UNIX 107-byte socket-path limit). Keyed by idx to keep it tiny.
         job_tmp = self.ray_tmp_root / f"j{job.idx}"
@@ -430,13 +441,19 @@ class Orchestrator:
         predicted = self.predict_mem(job)
         pred_str = f"{predicted:.0f} MiB" if predicted is not None else "uncalibrated"
         gpu_str = "cpu" if job.cpu_only else f"gpu{gpu}"
+        attempt_str = "" if job.attempts == 1 else f", attempt {job.attempts}"
         print(
             f"[launch] {job.job_id} ({gpu_str}, rows={job.rows}, "
-            f"predicted={pred_str}) -> {job.log_path}"
+            f"predicted={pred_str}{attempt_str}) -> {job.log_path}"
         )
 
     def reap(self) -> None:
-        """Collect finished subprocesses and classify their exit."""
+        """Collect finished subprocesses and classify their exit.
+
+        Failed jobs are re-queued (back to ``pending``) while they have retries left, so a
+        transient over-pack OOM can succeed on a later, emptier launch. Once retries are
+        exhausted the job is marked ``failed`` for good.
+        """
         still_running: list[Job] = []
         for job in self.running:
             assert job.proc is not None
@@ -448,11 +465,30 @@ class Orchestrator:
             job.finished_at = time.time()
             if rc == 0 and not self._log_has_oom(job):
                 job.status = "done"
+                print(f"[reap]   {job.job_id} done")
+                continue
+            reason = "OOM" if self._log_has_oom(job) else f"rc={rc}"
+            if job.attempts <= self.cfg.max_retries:
+                # Re-queue: reset runtime state and let the scheduler place it afresh.
+                job.status = "pending"
+                job.proc = None
+                job.gpu = None
+                job.started_at = None
+                job.finished_at = None
+                job.returncode = None
+                job.used_before_launch_mib = None
+                self.pending.append(job)
+                retries_left = self.cfg.max_retries - job.attempts + 1
+                print(
+                    f"[reap]   {job.job_id} FAILED ({reason}) -> retrying "
+                    f"({retries_left} left)"
+                )
             else:
                 job.status = "failed"
-            reason = "OOM" if self._log_has_oom(job) else f"rc={rc}"
-            mark = "done" if job.status == "done" else f"FAILED ({reason})"
-            print(f"[reap]   {job.job_id} {mark}")
+                print(
+                    f"[reap]   {job.job_id} FAILED ({reason}) "
+                    f"after {job.attempts} attempt(s)"
+                )
         self.running = still_running
 
     @staticmethod
@@ -628,6 +664,7 @@ class Orchestrator:
                     "rows": j.rows,
                     "cpu_only": j.cpu_only,
                     "gpu": j.gpu,
+                    "attempts": j.attempts,
                     "status": j.status,
                     "returncode": j.returncode,
                     "wall_seconds": (
