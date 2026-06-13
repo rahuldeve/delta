@@ -105,6 +105,11 @@ class OrchestratorConfig:
     random_seed: int | None = None
     """Seed for the randomized job selection. Set for reproducible launch orders."""
 
+    gpus: tuple[int, ...] | None = None
+    """Physical GPU indices (nvidia-smi order) to spread jobs across. None = every detected
+    GPU. Each job is pinned to one GPU via CUDA_VISIBLE_DEVICES; jobs run one-per-GPU and are
+    packed up to ``mem_threshold`` independently on each card."""
+
     dry_run: bool = False
     """Print the size-sorted launch order and exit without running anything."""
 
@@ -131,6 +136,8 @@ class Job:
     started_at: float | None = None
     finished_at: float | None = None
     used_before_launch_mib: float | None = None
+    # Physical GPU index this job was pinned to (None for cpu-only jobs).
+    gpu: int | None = None
 
     @property
     def job_id(self) -> str:
@@ -243,19 +250,25 @@ def load_jobs_file(path: str) -> list[str]:
     return jobs
 
 
-def gpu_mem() -> tuple[float, float]:
-    """Return (used_mib, total_mib) for GPU 0 via nvidia-smi."""
+def gpu_mem_all() -> dict[int, tuple[float, float]]:
+    """Return {gpu_index: (used_mib, total_mib)} for every GPU via nvidia-smi.
+
+    nvidia-smi reports physical indices and ignores CUDA_VISIBLE_DEVICES, so these indices
+    are stable regardless of how individual jobs are pinned.
+    """
     out = subprocess.check_output(
         [
             "nvidia-smi",
-            "--query-gpu=memory.used,memory.total",
+            "--query-gpu=index,memory.used,memory.total",
             "--format=csv,noheader,nounits",
-            "--id=0",
         ],
         text=True,
     )
-    used_str, total_str = out.strip().splitlines()[0].split(",")
-    return float(used_str), float(total_str)
+    result: dict[int, tuple[float, float]] = {}
+    for line in out.strip().splitlines():
+        idx_str, used_str, total_str = line.split(",")
+        result[int(idx_str)] = (float(used_str), float(total_str))
+    return result
 
 
 def fetch_finished_wandb(
@@ -319,9 +332,22 @@ class Orchestrator:
         # would inflate per-row and make big jobs look unschedulable. 0 = uncalibrated.
         self.calib_rows: int = 0
         self.last_launch_ts: float = 0.0
-        self.baseline_used: float = 0.0
-        self.total_mib: float = 0.0
-        self.peak_used: float = 0.0
+        # GPUs to spread across. cfg.gpus restricts the set; otherwise every detected GPU.
+        # Per-GPU memory is tracked independently so each card is packed up to mem_threshold
+        # on its own. mem_per_row stays global -- it's a workload property, not a per-card one
+        # (this assumes the GPUs are homogeneous; mixed-capacity cards are only approximated).
+        detected = gpu_mem_all()
+        if cfg.gpus is not None:
+            missing = [g for g in cfg.gpus if g not in detected]
+            if missing:
+                raise SystemExit(f"Requested GPUs not found via nvidia-smi: {missing}")
+            self.gpu_ids: list[int] = list(cfg.gpus)
+        else:
+            self.gpu_ids = sorted(detected)
+        self.gpu_total: dict[int, float] = {g: detected[g][1] for g in self.gpu_ids}
+        self.gpu_used: dict[int, float] = {g: detected[g][0] for g in self.gpu_ids}
+        self.baseline_used: dict[int, float] = dict(self.gpu_used)
+        self.peak_used: dict[int, float] = dict(self.gpu_used)
         # Short temp root for per-job Ray instances. Must be short: Ray builds AF_UNIX socket
         # paths under here and they cannot exceed 107 bytes (run_dir is far too deep to use).
         self.ray_tmp_root = Path(tempfile.mkdtemp(prefix="orchray_"))
@@ -371,7 +397,7 @@ class Orchestrator:
 
     # --- subprocess lifecycle -------------------------------------------------
 
-    def launch(self, job: Job, used_now: float) -> None:
+    def launch(self, job: Job, gpu: int | None, used_now: float) -> None:
         job.log_path = self.run_dir / f"{job.job_id}.log"
         # Per-job Ray temp dir under the short root (absolute + short to satisfy Ray's
         # AF_UNIX 107-byte socket-path limit). Keyed by idx to keep it tiny.
@@ -381,6 +407,12 @@ class Orchestrator:
         # Isolate each run's Ray instance to avoid temp/port collisions (cli.py ray.init).
         env["TMPDIR"] = str(job_tmp)
         env["RAY_TMPDIR"] = str(job_tmp)
+        # Pin the job to its assigned GPU. With only that card visible, the trainers'
+        # accelerator="auto", devices=1 lands on it (no evaluate.cli changes needed).
+        # PCI_BUS_ID makes CUDA's enumeration match the nvidia-smi index we assigned.
+        # cpu-only jobs (xgboost) get no GPU.
+        env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+        env["CUDA_VISIBLE_DEVICES"] = "" if job.cpu_only else str(gpu)
         log_file = open(job.log_path, "w")
         job.proc = subprocess.Popen(
             job.argv,
@@ -388,6 +420,7 @@ class Orchestrator:
             stderr=subprocess.STDOUT,
             env=env,
         )
+        job.gpu = gpu
         job.status = "running"
         job.started_at = time.time()
         job.used_before_launch_mib = used_now
@@ -396,8 +429,9 @@ class Orchestrator:
         self.last_launch_ts = time.time()
         predicted = self.predict_mem(job)
         pred_str = f"{predicted:.0f} MiB" if predicted is not None else "uncalibrated"
+        gpu_str = "cpu" if job.cpu_only else f"gpu{gpu}"
         print(
-            f"[launch] {job.job_id} (rows={job.rows}, "
+            f"[launch] {job.job_id} ({gpu_str}, rows={job.rows}, "
             f"predicted={pred_str}) -> {job.log_path}"
         )
 
@@ -433,70 +467,91 @@ class Orchestrator:
 
     # --- scheduling -----------------------------------------------------------
 
-    def pick_job_that_fits(self, used_now: float) -> Job | None:
-        """Pick a job to launch from those that currently fit, chosen at random.
+    def pick_job_and_gpu(
+        self, used_by_gpu: dict[int, float]
+    ) -> tuple[Job, int | None] | None:
+        """Pick a ``(job, gpu)`` pair to launch, chosen at random among those that fit.
 
-        Eligibility respects every safety gate: the GPU memory budget, the CPU-only cap,
-        and the one-uncalibrated-GPU-job-at-a-time rule. Among the eligible jobs we choose
-        *randomly* rather than strictly largest-first, so one heavy dataset (e.g. GSK_HEPG2,
-        which contributes many same-size jobs) doesn't monopolise every launch slot.
+        A GPU job is eligible iff *some* GPU has room for its predicted footprint under that
+        card's ``mem_threshold`` cap; it is pinned to one of the GPUs with room. Among the
+        eligible ``(job, gpu)`` pairs we choose *randomly* rather than strictly largest-first,
+        so one heavy dataset (e.g. GSK_HEPG2, which contributes many same-size jobs) doesn't
+        monopolise every launch slot. CPU-only jobs (gpu=None) respect the CPU-only cap.
 
-        The one exception is the very first GPU calibration: while ``mem_per_row`` is still
-        unknown we deterministically pick the *largest* eligible GPU job, because the
-        intercept-free per-row model must be anchored on a big job (see ``update_mem_per_row``).
+        Two exceptions, both about calibration: the intercept-free per-row model must be
+        anchored on a big job (see ``update_mem_per_row``), so while ``mem_per_row`` is still
+        unknown we (a) allow only one uncalibrated GPU job running at a time, placing it on a
+        GPU with no running GPU job, and (b) deterministically pick the *largest* such job.
         """
-        cap = self.total_mib * self.cfg.mem_threshold
         running_cpu = sum(1 for j in self.running if j.cpu_only)
-        running_gpu = len(self.running) - running_cpu
+        # GPUs that currently have a running GPU job pinned to them.
+        busy_gpus = {
+            j.gpu for j in self.running if not j.cpu_only and j.gpu is not None
+        }
 
-        candidates: list[Job] = []
+        # CPU-only candidates (no GPU assignment).
+        cpu_candidates: list[Job] = []
+        if running_cpu < self.cfg.max_cpu_concurrent:
+            cpu_candidates = [j for j in self.pending if j.cpu_only]
+
+        # GPU (job, gpu) candidate pairs.
+        gpu_pairs: list[tuple[Job, int]] = []
         for job in self.pending:
             if job.cpu_only:
-                if running_cpu < self.cfg.max_cpu_concurrent:
-                    candidates.append(job)
                 continue
             predicted = self.predict_mem(job)
             if predicted is None:
-                # Uncalibrated GPU job: only one at a time, to measure its footprint.
-                if running_gpu == 0:
-                    candidates.append(job)
+                # Uncalibrated GPU job: only one running at a time, on a free GPU.
+                if not busy_gpus:
+                    for g in self.gpu_ids:
+                        gpu_pairs.append((job, g))
                 continue
-            if used_now + predicted <= cap:
-                candidates.append(job)
+            for g in self.gpu_ids:
+                cap = self.gpu_total[g] * self.cfg.mem_threshold
+                if used_by_gpu[g] + predicted <= cap:
+                    gpu_pairs.append((job, g))
 
+        # Anchor the first calibration on the largest eligible GPU job (any free GPU).
+        if self.mem_per_row is None and gpu_pairs:
+            job, _ = max(gpu_pairs, key=lambda pair: pair[0].rows)
+            free = [g for g in self.gpu_ids if g not in busy_gpus]
+            if free:
+                return job, random.choice(free)
+
+        candidates: list[tuple[Job, int | None]] = [(j, None) for j in cpu_candidates]
+        candidates.extend(gpu_pairs)
         if not candidates:
             return None
-
-        # Anchor the first calibration on the largest GPU job; randomise everything else.
-        if self.mem_per_row is None:
-            gpu_uncalibrated = [j for j in candidates if not j.cpu_only]
-            if gpu_uncalibrated:
-                return max(gpu_uncalibrated, key=lambda j: j.rows)
         return random.choice(candidates)
 
     def run(self) -> None:
-        self.baseline_used, self.total_mib = gpu_mem()
-        self.peak_used = self.baseline_used
+        gpu_list = ", ".join(
+            f"gpu{g} {self.gpu_used[g]:.0f}/{self.gpu_total[g]:.0f} MiB"
+            for g in self.gpu_ids
+        )
         print(
-            f"GPU: {self.baseline_used:.0f}/{self.total_mib:.0f} MiB used at start; "
-            f"threshold {self.cfg.mem_threshold:.0%} "
-            f"({self.total_mib * self.cfg.mem_threshold:.0f} MiB)"
+            f"GPUs at start: {gpu_list}; per-GPU threshold {self.cfg.mem_threshold:.0%}"
         )
 
         try:
             while self.pending or self.running:
                 self.reap()
-                used_now, self.total_mib = gpu_mem()
-                self.peak_used = max(self.peak_used, used_now)
+                detected = gpu_mem_all()
+                for g in self.gpu_ids:
+                    self.gpu_used[g] = detected[g][0]
+                    self.gpu_total[g] = detected[g][1]
+                    self.peak_used[g] = max(self.peak_used[g], self.gpu_used[g])
 
                 # Refine the per-row estimate from jobs that have had time to settle.
+                # Each job's footprint is read from the card it was pinned to.
                 for job in self.running:
                     if (
                         job.started_at is not None
                         and time.time() - job.started_at >= self.cfg.settle_seconds
                         and job.used_before_launch_mib is not None
+                        and job.gpu is not None
                     ):
-                        self.update_mem_per_row(job, used_now)
+                        self.update_mem_per_row(job, self.gpu_used[job.gpu])
                         job.used_before_launch_mib = None  # consume once
 
                 settled = time.time() - self.last_launch_ts >= self.cfg.settle_seconds
@@ -505,12 +560,14 @@ class Orchestrator:
                     and settled
                     and len(self.running) < self.cfg.max_concurrent
                 ):
-                    job = self.pick_job_that_fits(used_now)
-                    if job is not None:
-                        self.launch(job, used_now)
+                    pick = self.pick_job_and_gpu(self.gpu_used)
+                    if pick is not None:
+                        job, gpu = pick
+                        used_now = self.gpu_used[gpu] if gpu is not None else 0.0
+                        self.launch(job, gpu, used_now)
                         continue  # re-tick immediately to reflect the new launch
 
-                self._print_status(used_now)
+                self._print_status()
                 if not self.pending and not self.running:
                     break
                 time.sleep(self.cfg.poll_interval)
@@ -537,13 +594,16 @@ class Orchestrator:
             job.status = "failed"
             job.returncode = job.proc.returncode
 
-    def _print_status(self, used_now: float) -> None:
+    def _print_status(self) -> None:
         counts = {s: 0 for s in ("pending", "running", "done", "failed", "skipped")}
         for job in self.jobs:
             counts[job.status] += 1
         mpr = f"{self.mem_per_row:.3f}" if self.mem_per_row is not None else "n/a"
+        gpu_str = " ".join(
+            f"g{g}={self.gpu_used[g]:.0f}/{self.gpu_total[g]:.0f}" for g in self.gpu_ids
+        )
         print(
-            f"[status] GPU {used_now:.0f}/{self.total_mib:.0f} MiB | "
+            f"[status] {gpu_str} MiB | "
             f"mem/row={mpr} | running={counts['running']} pending={counts['pending']} "
             f"done={counts['done']} failed={counts['failed']} skipped={counts['skipped']}"
         )
@@ -551,9 +611,14 @@ class Orchestrator:
     def _write_summary(self) -> None:
         summary = {
             "run_dir": str(self.run_dir),
-            "gpu_total_mib": self.total_mib,
-            "baseline_used_mib": self.baseline_used,
-            "peak_used_mib": self.peak_used,
+            "gpus": {
+                str(g): {
+                    "total_mib": self.gpu_total[g],
+                    "baseline_used_mib": self.baseline_used[g],
+                    "peak_used_mib": self.peak_used[g],
+                }
+                for g in self.gpu_ids
+            },
             "mem_per_row_final": self.mem_per_row,
             "jobs": [
                 {
@@ -562,6 +627,7 @@ class Orchestrator:
                     "dataset": j.dataset,
                     "rows": j.rows,
                     "cpu_only": j.cpu_only,
+                    "gpu": j.gpu,
                     "status": j.status,
                     "returncode": j.returncode,
                     "wall_seconds": (
@@ -578,7 +644,8 @@ class Orchestrator:
         path.write_text(json.dumps(summary, indent=2))
         print(f"\nSummary written to {path}")
         for j in sorted(self.jobs, key=lambda j: j.idx):
-            print(f"  {j.job_id:<28} {j.status:<8} rc={j.returncode}")
+            gpu_str = "" if j.gpu is None else f" gpu={j.gpu}"
+            print(f"  {j.job_id:<28} {j.status:<8} rc={j.returncode}{gpu_str}")
 
 
 def print_dry_run(jobs: list[Job]) -> None:
@@ -643,11 +710,11 @@ def main(cfg: OrchestratorConfig) -> None:
         print_dry_run(jobs)
         return
 
-    # Fail fast if we can't read the GPU.
+    # Fail fast if we can't read the GPUs.
     try:
-        gpu_mem()
+        gpu_mem_all()
     except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-        raise SystemExit(f"Could not query GPU via nvidia-smi: {exc}")
+        raise SystemExit(f"Could not query GPUs via nvidia-smi: {exc}")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = (Path(cfg.log_dir) / timestamp).resolve()
