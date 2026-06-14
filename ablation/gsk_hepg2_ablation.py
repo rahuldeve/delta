@@ -4,10 +4,10 @@ from dataclasses import asdict
 import numpy as np
 import tyro
 
-from config import TrainConfig, WandbConfig, WandbDisabled, WandbEnabled
+from config import SplitType, TrainConfig, WandbConfig, WandbDisabled, WandbEnabled
 from data import SupportedDatasets
 from evaluate.cli import prepare_dataset
-from evaluate.train import get_group_splitters
+from evaluate.train import get_group_splitters, get_random_splitters
 from models.config import ChempropConfig, DeltapropConfig
 
 
@@ -39,18 +39,28 @@ def nested_stratified_fractions(df, fractions, seed):
         yield fraction, sub_df
 
 
-def single_butina_split(df, n_splits, seed):
-    """Build one Butina-grouped train/val/test split (no cross-validation).
+def single_split(df, n_splits, seed, split_type):
+    """Build one train/val/test split (no cross-validation) for the given split type.
 
     Mirrors the first iteration of `generate_repeated_5xn_splits`: the outer
-    StratifiedGroupKFold yields train vs val+test (ratio 1/n_splits), then the
-    inner 2-fold splitter halves val+test into val and test. Groups are the
-    precomputed `butina_cluster` column, so no cluster leaks across the split.
+    splitter yields train vs val+test (ratio 1/n_splits), then the inner 2-fold
+    splitter halves val+test into val and test. For SCAFFOLD/BUTINA the grouping
+    column keeps clusters disjoint across the split; RANDOM ignores groups.
     """
-    outer_splitter, inner_splitter = get_group_splitters(seed, n_outer=n_splits)
+    if split_type == SplitType.RANDOM:
+        outer_splitter, inner_splitter = get_random_splitters(seed, n_outer=n_splits)
+        groups_of = lambda _df: None  # noqa: E731
+    elif split_type == SplitType.SCAFFOLD:
+        outer_splitter, inner_splitter = get_group_splitters(seed, n_outer=n_splits)
+        groups_of = lambda _df: _df["scaffold_cluster"]  # noqa: E731
+    elif split_type == SplitType.BUTINA:
+        outer_splitter, inner_splitter = get_group_splitters(seed, n_outer=n_splits)
+        groups_of = lambda _df: _df["butina_cluster"]  # noqa: E731
+    else:
+        raise ValueError(split_type)
 
     train_idxs, val_test_idxs = next(
-        outer_splitter.split(df, y=df["bin_target"], groups=df["butina_cluster"])
+        outer_splitter.split(df, y=df["bin_target"], groups=groups_of(df))
     )
     train_df = df.loc[train_idxs].reset_index(drop=True)
     val_test_df = df.loc[val_test_idxs].reset_index(drop=True)
@@ -59,7 +69,7 @@ def single_butina_split(df, n_splits, seed):
         inner_splitter.split(
             val_test_df,
             y=val_test_df["bin_target"],
-            groups=val_test_df["butina_cluster"],
+            groups=groups_of(val_test_df),
         )
     )
     val_df = val_test_df.loc[val_idxs].reset_index(drop=True)
@@ -101,7 +111,7 @@ def run(
     chemprop_cf: ChempropConfig,
     deltaprop_cf: DeltapropConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
-    fractions: tuple[float, ...] = (0.2, 0.4, 0.6, 0.8, 1.0),
+    fractions: tuple[float, ...] = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
 ):
     from evaluate.train import train_and_evaluate_split
     from models.chemprop_bl import ChempropRef
@@ -141,7 +151,9 @@ def run(
     for fraction, sub_df in nested_stratified_fractions(
         df, fractions, train_cf.random_seed
     ):
-        split = single_butina_split(sub_df, train_cf.n_splits, train_cf.random_seed)
+        split = single_split(
+            sub_df, train_cf.n_splits, train_cf.random_seed, train_cf.split_type
+        )
         train_df, val_df, test_df = split
 
         for model_name, model_class, model_cf in models:
