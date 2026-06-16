@@ -19,9 +19,11 @@ def build_discordancy_matrix(
     exp_s = np.exp(raw_scores)  # (N,)
 
     # (N, N) terms
-    exp_i = exp_s[:, None]                              # exp(s_i)
-    exp_j = exp_s[None, :]                              # exp(s_j)
-    exp_tie = nu * np.exp((raw_scores[:, None] + raw_scores[None, :]) / 2)  # ν·exp((s_i+s_j)/2)
+    exp_i = exp_s[:, None]  # exp(s_i)
+    exp_j = exp_s[None, :]  # exp(s_j)
+    exp_tie = nu * np.exp(
+        (raw_scores[:, None] + raw_scores[None, :]) / 2
+    )  # ν·exp((s_i+s_j)/2)
 
     # Net model preference for i over j, accounting for ν
     net_model_pref = (exp_i - exp_j) / (exp_i + exp_j + exp_tie)  # in (-1, 1)
@@ -31,6 +33,7 @@ def build_discordancy_matrix(
     D = -(ref_diff * net_model_pref)
     np.fill_diagonal(D, 0.0)
     return D
+
 
 def top_k_discordant(
     D: np.ndarray,
@@ -116,23 +119,19 @@ class RandomPairDataset(Dataset):
         self.frac_hard = frac_hard
         self.discordancy_degree = discordancy_degree
 
-
     def __len__(self):
         return len(self.anchor_dataset)
-    
+
     def get_hard_neg_candidates(self, idx: int, n: int):
         if self.discordancy_degree is None:
             return []
-        
+
         if n == 0:
             return []
-        
-        selected_idxs = top_k_discordant(
-            self.discordancy_degree, idx, n
-        )
-        
+
+        selected_idxs = top_k_discordant(self.discordancy_degree, idx, n)
+
         return [self.candidate_dataset[idx] for idx in selected_idxs]
-    
 
     def get_random_candidates(self, n_random: int):
         targets = self.candidate_dataset.Y.squeeze()
@@ -146,27 +145,37 @@ class RandomPairDataset(Dataset):
         pos_class_idxs = np.argwhere(pos_class_mask).squeeze()
         neg_class_idxs = np.argwhere(~pos_class_mask).squeeze()
 
-        pos_class_sample_count = min(int(0.8*n_random), pos_class_idxs.shape[0])
+        pos_class_sample_count = min(int(0.8 * n_random), pos_class_idxs.shape[0])
         random_pos_class_idxs = np.random.choice(
             pos_class_idxs,
-            size=(pos_class_sample_count, ),
+            size=(pos_class_sample_count,),
             replace=False,
         )
-        random_pos_candidates = [self.candidate_dataset[idx] for idx in random_pos_class_idxs]
+        random_pos_candidates = [
+            self.candidate_dataset[idx] for idx in random_pos_class_idxs
+        ]
 
-        neg_class_sample_count = min(n_random - pos_class_sample_count, neg_class_idxs.shape[0])
+        neg_class_sample_count = min(
+            n_random - pos_class_sample_count, neg_class_idxs.shape[0]
+        )
         random_neg_class_idxs = np.random.choice(
             neg_class_idxs,
-            size=(neg_class_sample_count, ),
+            size=(neg_class_sample_count,),
             replace=False,
         )
-        random_neg_candidates = [self.candidate_dataset[idx] for idx in random_neg_class_idxs]
+        random_neg_candidates = [
+            self.candidate_dataset[idx] for idx in random_neg_class_idxs
+        ]
 
         return random_pos_candidates + random_neg_candidates
 
     def __getitem__(self, idx) -> RandomPairDataPoint:
-        hard_neg_candidates = self.get_hard_neg_candidates(idx, int(self.frac_hard * self.n_candidates))
-        random_candidates = self.get_random_candidates(self.n_candidates - len(hard_neg_candidates))
+        hard_neg_candidates = self.get_hard_neg_candidates(
+            idx, int(self.frac_hard * self.n_candidates)
+        )
+        random_candidates = self.get_random_candidates(
+            self.n_candidates - len(hard_neg_candidates)
+        )
         # random_candidates = self.get_random_candidates(self.n_candidates)
         return RandomPairDataPoint(
             self.anchor_dataset[idx],
@@ -192,22 +201,25 @@ class RandomPairDataModule(L.LightningDataModule):
         binary_threshold: DSThreshold,
         batch_size: int,
         n_candidates: int,
+        frac_hard: float = 0.2,
         num_workers: int = 8,
     ) -> None:
         super().__init__()
 
         self.train_ds = RandomPairDataset(
-            anchor_dataset=train_mol_ds, 
-            candidate_dataset=train_mol_ds, 
-            binary_threshold=binary_threshold, 
-            n_candidates=n_candidates
+            anchor_dataset=train_mol_ds,
+            candidate_dataset=train_mol_ds,
+            binary_threshold=binary_threshold,
+            n_candidates=n_candidates,
+            frac_hard=frac_hard,
         )
 
         self.val_ds = RandomPairDataset(
-            anchor_dataset=val_mol_ds, 
-            candidate_dataset=train_mol_ds, 
-            binary_threshold=binary_threshold, 
-            n_candidates=n_candidates
+            anchor_dataset=val_mol_ds,
+            candidate_dataset=train_mol_ds,
+            binary_threshold=binary_threshold,
+            n_candidates=n_candidates,
+            frac_hard=frac_hard,
         )
 
         self.batch_size = batch_size
@@ -221,13 +233,12 @@ class RandomPairDataModule(L.LightningDataModule):
             theta_hat_train = score_all(train_mol_ds, model).squeeze()
 
             with torch.no_grad():
-                nu = model.interaction.log_nu.exp().cpu().item() # type: ignore
+                nu = model.interaction.log_nu.exp().cpu().item()  # type: ignore
 
             self.update_discordancy_mat_train(
                 theta_hat_train.cpu().numpy(),
                 nu,
             )
-            
 
         return DataLoader(
             self.train_ds,
@@ -250,12 +261,12 @@ class RandomPairDataModule(L.LightningDataModule):
 
     def update_discordancy_mat_train(self, train_model_scores, nu: float):
         reference_scores = self.train_ds.anchor_dataset.Y.squeeze()
-        self.train_ds.discordancy_degree = build_discordancy_matrix(train_model_scores, reference_scores, nu)
+        self.train_ds.discordancy_degree = build_discordancy_matrix(
+            train_model_scores, reference_scores, nu
+        )
 
 
 def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
-
-

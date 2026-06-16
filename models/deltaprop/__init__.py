@@ -142,11 +142,12 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         set_seeds(train_config.random_seed)
 
         datamodule = RandomPairDataModule(
-            train_mol_ds=train_split, 
+            train_mol_ds=train_split,
             val_mol_ds=val_split,
             binary_threshold=df_classification_threshold,
             batch_size=train_config.batch_size,
             n_candidates=model_config.candidate_size,
+            frac_hard=model_config.frac_hard,
         )
 
         with tempfile.TemporaryDirectory() as ckpt_dir:
@@ -236,9 +237,7 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         # set but pre-scaled for the val set; `split_X_d_prescaled` avoids
         # double-scaling its features.
         train_embeds = embed_all(train_split, model)
-        test_embeds = embed_all(
-            test_split, model, scale_X_d=not split_X_d_prescaled
-        )
+        test_embeds = embed_all(test_split, model, scale_X_d=not split_X_d_prescaled)
 
         pred_probs = class_mean_probs(
             model,
