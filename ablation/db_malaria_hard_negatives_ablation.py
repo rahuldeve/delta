@@ -50,7 +50,19 @@ def run(
     chemprop_cf: ChempropConfig,
     deltaprop_cf: DeltapropConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
-    frac_hard_values: tuple[float, ...] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+    frac_hard_values: tuple[float, ...] = (
+        0.0,
+        0.1,
+        0.2,
+        0.3,
+        0.4,
+        0.5,
+        0.6,
+        0.7,
+        0.8,
+        0.9,
+        1.0,
+    ),
 ):
     from evaluate.train import train_and_evaluate_split
     from models.chemprop_bl import ChempropRef
