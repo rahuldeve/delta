@@ -89,10 +89,6 @@ def run(
         drop_nan_features=True,
     )
 
-    # Initial stratified subsample to 40% of the full dataset (class balance
-    # preserved), shared by the whole candidate sweep.
-    _, df = next(nested_stratified_fractions(df, [0.4], train_cf.random_seed))
-
     # One SCAFFOLD split on the subsampled dataset, shared by every run below.
     split = single_split(
         df, train_cf.n_splits, train_cf.random_seed, train_cf.split_type
