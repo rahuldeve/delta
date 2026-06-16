@@ -107,6 +107,8 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             input_dim=ffn_dims,
             hidden_dim=model_config.encoder_hidden_dim,
             output_dim=model_config.encoder_output_dim,
+            n_layers=model_config.encoder_n_layers,
+            dropout=model_config.encoder_dropout,
             activation="elu",
         )
         interaction = Interaction(
