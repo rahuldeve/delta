@@ -203,6 +203,7 @@ class RandomPairDataModule(L.LightningDataModule):
         n_candidates: int,
         frac_hard: float = 0.2,
         num_workers: int = 8,
+        seed: int = 42,
     ) -> None:
         super().__init__()
 
@@ -224,6 +225,7 @@ class RandomPairDataModule(L.LightningDataModule):
 
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.seed = seed
 
     def train_dataloader(self):
         if self.trainer is not None and self.trainer.current_epoch > 0:
@@ -246,16 +248,21 @@ class RandomPairDataModule(L.LightningDataModule):
             shuffle=True,
             collate_fn=RandomPairDataset.collate_function,
             worker_init_fn=seed_worker,
+            generator=torch.Generator().manual_seed(self.seed),
             num_workers=self.num_workers,
             drop_last=False,
         )
 
     def val_dataloader(self):
+        # Seed the workers so the (random) validation candidate pairs are
+        # reproducible across runs, making val_loss a stable early-stopping signal.
         return DataLoader(
             self.val_ds,
             batch_size=self.batch_size,
             shuffle=False,
             collate_fn=RandomPairDataset.collate_function,
+            worker_init_fn=seed_worker,
+            generator=torch.Generator().manual_seed(self.seed),
             num_workers=self.num_workers,
         )
 

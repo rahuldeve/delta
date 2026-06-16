@@ -148,6 +148,7 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             batch_size=train_config.batch_size,
             n_candidates=model_config.candidate_size,
             frac_hard=model_config.frac_hard,
+            seed=train_config.random_seed,
         )
 
         with tempfile.TemporaryDirectory() as ckpt_dir:
