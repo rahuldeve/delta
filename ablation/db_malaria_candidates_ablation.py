@@ -74,7 +74,7 @@ def run(
         tags = set(wandb_cf.tags) | set(
             [
                 "ablation",
-                "gsk_hepg2",
+                "db_malaria",
                 "candidate_size",
                 train_cf.split_type,
             ]
@@ -84,7 +84,7 @@ def run(
         run_.mark_preempting()
 
     df, df_classification_threshold = prepare_dataset(
-        SupportedDatasets.GSK_HEPG2,
+        SupportedDatasets.DB_MALARIA,
         use_features=False,
         drop_nan_features=True,
     )
@@ -119,7 +119,7 @@ def run(
             | metrics_dict
             | asdict(model_cf)
             | asdict(train_cf)
-            | dict(dataset="GSK_HEPG2")
+            | dict(dataset="DB_MALARIA")
         )
 
         if isinstance(wandb_cf, WandbEnabled):
