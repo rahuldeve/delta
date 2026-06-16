@@ -55,7 +55,7 @@ def run(
     chemprop_cf: ChempropConfig,
     deltaprop_cf: DeltapropConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
-    candidate_sizes: tuple[int, ...] = (2, 4, 8, 16, 24, 32, 40, 48),
+    candidate_sizes: tuple[int, ...] = tuple(range(4, 52, 4)),
 ):
     from evaluate.train import train_and_evaluate_split
     from models.chemprop_bl import ChempropRef
