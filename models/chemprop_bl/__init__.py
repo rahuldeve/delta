@@ -24,7 +24,6 @@ from pytorch_lightning.utilities import move_data_to_device
 from sklearn.preprocessing import StandardScaler
 
 from config import TrainConfig
-from misc import set_seeds
 from models.abc import PreparedDatasetSplit, RefModel
 from models.config import ChempropConfig
 
@@ -160,8 +159,6 @@ class ChempropRef(RefModel[ChempropConfig]):
         train_config: TrainConfig,
         **kwargs,
     ) -> Self:
-        set_seeds(train_config.random_seed)
-
         train_loader = build_dataloader(
             train_split,
             batch_size=train_config.batch_size,

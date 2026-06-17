@@ -20,7 +20,6 @@ from sklearn.preprocessing import StandardScaler
 
 from config import TrainConfig
 from data import DSThreshold
-from misc import set_seeds
 from models.abc import PreparedDatasetSplit, RefModel
 from models.config import DeltapropConfig
 from models.deltaprop.data import RandomPairDataModule
@@ -141,8 +140,6 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         model_config: DeltapropConfig,
         **kwargs,
     ) -> Self:
-        set_seeds(train_config.random_seed)
-
         datamodule = RandomPairDataModule(
             train_mol_ds=train_split,
             val_mol_ds=val_split,

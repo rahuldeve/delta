@@ -10,7 +10,6 @@ from sklearn.pipeline import FunctionTransformer, make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from config import TrainConfig
-from misc import set_seeds
 from models.abc import PreparedDatasetSplit, RefModel
 from models.config import XGBoostConfig
 from models.xgboost_bl.utils import CorrelationThreshold
@@ -61,8 +60,6 @@ class XGBoostRef(RefModel[XGBoostConfig]):
         train_config: TrainConfig,
         **kwargs,
     ) -> Self:
-        set_seeds(train_config.random_seed)
-
         feat_cols = [c for c in train_split.columns if c.startswith("feat")]
         X_train = train_split.loc[:, feat_cols]
         y_train = train_split["bin_target"]

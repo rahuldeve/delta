@@ -19,6 +19,7 @@ from sklearn.model_selection import (
 
 from config import SplitType, TrainConfig
 from data import DSThreshold
+from misc import set_seeds
 from models.abc import RefModel
 from models.config import ModelConfig
 
@@ -111,6 +112,10 @@ def train_and_evaluate_split(
         train_df=train_df, val_df=val_df, test_df=test_df
     )
 
+    # Seed before build so random weight initialization is deterministic. Each
+    # train_func re-seeds afterwards so dataloader/training RNG is independent of
+    # whatever build() consumed.
+    set_seeds(train_config.random_seed)
     model = model_class.build(model_config=model_config, **extras)
 
     model = model.train_func(
