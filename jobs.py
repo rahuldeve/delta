@@ -13,7 +13,7 @@ Run with:
     uv run --active python orchestrator.py --jobs-file jobs.py
 """
 
-WANDB_PROJECT = "evaluate_all_v5"
+WANDB_PROJECT = "evaluate_all_v6"
 
 DATASETS = [
     "SINGLE_TARGET_TBA",
