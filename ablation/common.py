@@ -1,14 +1,20 @@
+"""Shared helpers for the ablation studies.
+
+All ablation studies log to a single wandb project (pass `--wandb-cf.project-name
+ablations`), with one named run per study and every sweep point logged as a history
+step in that run. This module holds the split helpers, the wandb init/artifact
+plumbing, and the generic per-sweep-point train+log routine that the studies in
+`studies.py` reuse.
+"""
+
 import pickle
 from dataclasses import asdict
+from datetime import datetime
 
 import numpy as np
-import tyro
 
-from config import SplitType, TrainConfig, WandbConfig, WandbDisabled, WandbEnabled
-from data import SupportedDatasets
-from evaluate.cli import prepare_dataset
+from config import SplitType, TrainConfig, WandbConfig, WandbEnabled
 from evaluate.train import get_group_splitters, get_random_splitters
-from models.config import ChempropConfig, DeltapropConfig
 
 
 def nested_stratified_fractions(df, fractions, seed):
@@ -78,11 +84,36 @@ def single_split(df, n_splits, seed, split_type):
     return train_df, val_df, test_df
 
 
-def ablation_log_artifacts(fraction, model_name, predictions, split):
+def init_ablation_run(wandb_cf: WandbConfig, run_name: str, extra_tags):
+    """Start the single named wandb run for an ablation study (no-op if disabled).
+
+    All studies tag with ``"ablation"`` plus the study-specific `extra_tags`. The
+    run name is `run_name` with a ``_YYYYmmdd_HHMMSS`` timestamp appended, so each
+    re-run is a distinct, identifiable run sharing the study prefix; the plot
+    notebooks select the latest run matching that prefix.
+    """
+    if not isinstance(wandb_cf, WandbEnabled):
+        return None
+
+    import wandb
+
+    wandb.login(key="cf344975eb80edf6f0d52af80528cc6094234caf")
+    tags = set(wandb_cf.tags) | {"ablation", *extra_tags}
+
+    timestamped_name = f"{run_name}_{datetime.now():%Y%m%d_%H%M%S}"
+    run = wandb.init(
+        project=wandb_cf.project_name, name=timestamped_name, tags=list(tags)
+    )
+    run.mark_preempting()
+    return run
+
+
+def log_artifacts(label, model_name, predictions, split):
+    """Log predictions + split as a wandb artifact, named by the sweep `label`."""
     import wandb
 
     artifact = wandb.Artifact(  # type: ignore
-        name=f"frac{int(fraction * 100)}_{model_name}_artifacts",
+        name=f"{label}_{model_name}_artifacts",
         type="generic",
     )
 
@@ -106,87 +137,45 @@ def ablation_log_artifacts(fraction, model_name, predictions, split):
     wandb.run.log_artifact(artifact)  # type: ignore
 
 
-def run(
+def evaluate_and_log(
+    *,
+    split,
+    df_classification_threshold,
+    model_class,
+    model_cf,
+    model_name: str,
     train_cf: TrainConfig,
-    chemprop_cf: ChempropConfig,
-    deltaprop_cf: DeltapropConfig,
-    wandb_cf: WandbConfig = WandbDisabled(),
-    fractions: tuple[float, ...] = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+    wandb_cf: WandbConfig,
+    extra_cols: dict,
+    label: str,
 ):
-    from evaluate.train import train_and_evaluate_split
-    from models.chemprop_bl import ChempropRef
-    from models.deltaprop import DeltapropRef
+    """Train on one split, assemble a result row, and log it to the active run.
 
-    # This ablation only studies the feature-free (graph-only) setting for now;
-    # pin the flag so logged configs reflect reality regardless of CLI input.
-    train_cf.use_feats = False
+    `extra_cols` carries the study-specific columns (sweep value, ``n_train``,
+    ``model``, ``dataset``); the row is `extra_cols | metrics | model_cf | train_cf`.
+    When wandb is enabled the row is logged as a history step and the predictions +
+    split are attached as an artifact keyed by `label`.
+    """
+    from evaluate.train import train_and_evaluate_split
+
+    train_df, val_df, test_df = split
+    metrics_dict, predictions = train_and_evaluate_split(
+        train_df=train_df,
+        val_df=val_df,
+        test_df=test_df,
+        df_classification_threshold=df_classification_threshold,
+        model_class=model_class,
+        model_config=model_cf,
+        train_config=train_cf,
+    )
+
+    row = extra_cols | metrics_dict | asdict(model_cf) | asdict(train_cf)
 
     if isinstance(wandb_cf, WandbEnabled):
         import wandb
 
-        wandb.login(key="cf344975eb80edf6f0d52af80528cc6094234caf")
-        tags = set(wandb_cf.tags) | set(
-            [
-                "ablation",
-                "gsk_hepg2",
-                train_cf.split_type,
-            ]
-        )
+        wandb.log(row)  # type: ignore
+        log_artifacts(label, model_name, predictions, split)
 
-        run_ = wandb.init(project=wandb_cf.project_name, tags=list(tags))
-        run_.mark_preempting()
-
-    # This ablation only studies the feature-free (graph-only) setting for now.
-    df, df_classification_threshold = prepare_dataset(
-        SupportedDatasets.GSK_HEPG2,
-        use_features=False,
-        drop_nan_features=True,
-    )
-
-    models = [
-        ("chemprop", ChempropRef, chemprop_cf),
-        ("deltaprop", DeltapropRef, deltaprop_cf),
-    ]
-
-    for fraction, sub_df in nested_stratified_fractions(
-        df, fractions, train_cf.random_seed
-    ):
-        split = single_split(
-            sub_df, train_cf.n_splits, train_cf.random_seed, train_cf.split_type
-        )
-        train_df, val_df, test_df = split
-
-        for model_name, model_class, model_cf in models:
-            metrics_dict, predictions = train_and_evaluate_split(
-                train_df=train_df,
-                val_df=val_df,
-                test_df=test_df,
-                df_classification_threshold=df_classification_threshold,
-                model_class=model_class,
-                model_config=model_cf,
-                train_config=train_cf,
-            )
-
-            row = (
-                {
-                    "fraction": fraction,
-                    "n_train": len(train_df),
-                    "model": model_name,
-                }
-                | metrics_dict
-                | asdict(model_cf)
-                | asdict(train_cf)
-                | dict(dataset="GSK_HEPG2")
-            )
-
-            if isinstance(wandb_cf, WandbEnabled):
-                wandb.log(row)  # type: ignore
-                ablation_log_artifacts(fraction, model_name, predictions, split)
-
-            print(row)
-
-    return None
-
-
-if __name__ == "__main__":
-    tyro.cli(run)
+    print(row)
+    return row
