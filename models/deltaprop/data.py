@@ -246,13 +246,19 @@ class RandomPairDataModule(L.LightningDataModule):
                 nu,
             )
 
+        # Seed the generator per-epoch so each epoch draws a distinct (but
+        # reproducible) RNG stream. With a constant seed the worker seeds — and
+        # thus the shuffle order and random-candidate draws — would repeat every
+        # reload (reload_dataloaders_every_n_epochs), collapsing the resampled
+        # pairs to a couple of fixed realizations across the whole run.
+        epoch = self.trainer.current_epoch if self.trainer is not None else 0
         return DataLoader(
             self.train_ds,
             batch_size=self.batch_size,
             shuffle=True,
             collate_fn=RandomPairDataset.collate_function,
             worker_init_fn=seed_worker,
-            generator=torch.Generator().manual_seed(self.seed),
+            generator=torch.Generator().manual_seed(self.seed + epoch),
             num_workers=self.num_workers,
             drop_last=False,
         )
