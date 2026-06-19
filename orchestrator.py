@@ -379,8 +379,14 @@ class Orchestrator:
             return None
         return self.mem_per_row * job.rows + self.cfg.mem_margin_mib
 
-    def update_mem_per_row(self, job: Job, used_now: float) -> None:
+    def update_mem_per_row(self, job: Job, used_now: float) -> bool:
         """Refine the per-row estimate from a settled launch's observed memory delta.
+
+        Returns ``True`` when the sample has been handled and can be consumed -- either it
+        calibrated the estimate, or it was deliberately skipped because a larger job already
+        anchors it. Returns ``False`` when the job has not yet allocated GPU memory
+        (``delta <= 0``, e.g. it is still in CPU-side preprocessing); the caller should keep
+        the sample and retry on a later tick rather than burning the one measurement.
 
         Only (re)calibrate from the largest job seen so far. The per-row model has no
         intercept, so a small job (fixed CUDA/model overhead spread over few rows) yields a
@@ -389,12 +395,12 @@ class Orchestrator:
         (padded by ``mem_margin_mib``) for the light ones.
         """
         if job.cpu_only or job.rows <= 0 or job.used_before_launch_mib is None:
-            return
+            return True
         if self.mem_per_row is not None and job.rows < self.calib_rows:
-            return
+            return True  # a larger job already anchors the estimate; skip, don't spin
         delta = used_now - job.used_before_launch_mib
         if delta <= 0:
-            return
+            return False  # GPU not allocated yet (still preprocessing); retry next tick
         observed = delta / job.rows
         if self.mem_per_row is None:
             self.mem_per_row = observed
@@ -402,6 +408,7 @@ class Orchestrator:
             a = self.cfg.mem_ema_alpha
             self.mem_per_row = a * observed + (1 - a) * self.mem_per_row
         self.calib_rows = job.rows
+        return True
 
     # --- subprocess lifecycle -------------------------------------------------
 
@@ -504,7 +511,7 @@ class Orchestrator:
     # --- scheduling -----------------------------------------------------------
 
     def pick_job_and_gpu(
-        self, used_by_gpu: dict[int, float]
+        self, used_by_gpu: dict[int, float], free_only: bool = False
     ) -> tuple[Job, int | None] | None:
         """Pick a ``(job, gpu)`` pair to launch, chosen at random among those that fit.
 
@@ -516,18 +523,25 @@ class Orchestrator:
 
         Two exceptions, both about calibration: the intercept-free per-row model must be
         anchored on a big job (see ``update_mem_per_row``), so while ``mem_per_row`` is still
-        unknown we (a) allow only one uncalibrated GPU job running at a time, placing it on a
-        GPU with no running GPU job, and (b) deterministically pick the *largest* such job.
+        unknown we (a) run only one uncalibrated GPU job *per card* (placing each on a GPU with
+        no running GPU job), and (b) deterministically pick the *largest* such job.
+
+        When ``free_only`` is set the caller is launching onto an idle card without waiting for
+        the global settle timer, so every returned pair is pinned to a GPU with no running job
+        (at most one new job per card per tick) and CPU-only jobs are not offered -- they stay
+        on the settle-paced path.
         """
         running_cpu = sum(1 for j in self.running if j.cpu_only)
         # GPUs that currently have a running GPU job pinned to them.
         busy_gpus = {
             j.gpu for j in self.running if not j.cpu_only and j.gpu is not None
         }
+        free_gpus = [g for g in self.gpu_ids if g not in busy_gpus]
 
-        # CPU-only candidates (no GPU assignment).
+        # CPU-only candidates (no GPU assignment). Skipped under free_only: they don't occupy a
+        # card, so they belong on the settle-paced path, not the idle-card fast path.
         cpu_candidates: list[Job] = []
-        if running_cpu < self.cfg.max_cpu_concurrent:
+        if not free_only and running_cpu < self.cfg.max_cpu_concurrent:
             cpu_candidates = [j for j in self.pending if j.cpu_only]
 
         # GPU (job, gpu) candidate pairs.
@@ -537,12 +551,12 @@ class Orchestrator:
                 continue
             predicted = self.predict_mem(job)
             if predicted is None:
-                # Uncalibrated GPU job: only one running at a time, on a free GPU.
-                if not busy_gpus:
-                    for g in self.gpu_ids:
-                        gpu_pairs.append((job, g))
+                # Uncalibrated GPU job: one per free GPU (one at a time per card).
+                for g in free_gpus:
+                    gpu_pairs.append((job, g))
                 continue
-            for g in self.gpu_ids:
+            cand_gpus = free_gpus if free_only else self.gpu_ids
+            for g in cand_gpus:
                 cap = self.gpu_total[g] * self.cfg.mem_threshold
                 if used_by_gpu[g] + predicted <= cap:
                     gpu_pairs.append((job, g))
@@ -550,9 +564,8 @@ class Orchestrator:
         # Anchor the first calibration on the largest eligible GPU job (any free GPU).
         if self.mem_per_row is None and gpu_pairs:
             job, _ = max(gpu_pairs, key=lambda pair: pair[0].rows)
-            free = [g for g in self.gpu_ids if g not in busy_gpus]
-            if free:
-                return job, random.choice(free)
+            if free_gpus:
+                return job, random.choice(free_gpus)
 
         candidates: list[tuple[Job, int | None]] = [(j, None) for j in cpu_candidates]
         candidates.extend(gpu_pairs)
@@ -587,16 +600,32 @@ class Orchestrator:
                         and job.used_before_launch_mib is not None
                         and job.gpu is not None
                     ):
-                        self.update_mem_per_row(job, self.gpu_used[job.gpu])
-                        job.used_before_launch_mib = None  # consume once
+                        if self.update_mem_per_row(job, self.gpu_used[job.gpu]):
+                            job.used_before_launch_mib = (
+                                None  # consume once measured/skipped
+                            )
+                        else:
+                            print(
+                                f"[calib]  {job.job_id} no GPU allocation yet "
+                                f"(g{job.gpu}={self.gpu_used[job.gpu]:.0f} MiB); "
+                                "deferring calibration"
+                            )
 
+                # The settle timer paces *packing* (adding a job to a card that already has one,
+                # so its footprint is measured before we add more). Launching onto an idle card
+                # has no headroom to measure, so we allow it immediately and only restrict the
+                # pick to free cards (free_only) when the timer hasn't elapsed.
+                busy_gpus = {
+                    j.gpu for j in self.running if not j.cpu_only and j.gpu is not None
+                }
+                has_free_gpu = any(g not in busy_gpus for g in self.gpu_ids)
                 settled = time.time() - self.last_launch_ts >= self.cfg.settle_seconds
                 if (
                     self.pending
-                    and settled
+                    and (settled or has_free_gpu)
                     and len(self.running) < self.cfg.max_concurrent
                 ):
-                    pick = self.pick_job_and_gpu(self.gpu_used)
+                    pick = self.pick_job_and_gpu(self.gpu_used, free_only=not settled)
                     if pick is not None:
                         job, gpu = pick
                         used_now = self.gpu_used[gpu] if gpu is not None else 0.0
