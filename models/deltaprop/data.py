@@ -16,17 +16,21 @@ def build_discordancy_matrix(
     reference_scores: np.ndarray,
     nu: float,
 ) -> np.ndarray:
-    exp_s = np.exp(raw_scores)  # (N,)
+    # Fail loudly if the model diverged — this is the only remaining NaN source
+    # once the math below is stable, and silently swallowing it would hide it.
+    if not np.isfinite(raw_scores).all():
+        raise ValueError("raw_scores contains non-finite values (model diverged?)")
 
-    # (N, N) terms
-    exp_i = exp_s[:, None]  # exp(s_i)
-    exp_j = exp_s[None, :]  # exp(s_j)
-    exp_tie = nu * np.exp(
-        (raw_scores[:, None] + raw_scores[None, :]) / 2
-    )  # ν·exp((s_i+s_j)/2)
-
-    # Net model preference for i over j, accounting for ν
-    net_model_pref = (exp_i - exp_j) / (exp_i + exp_j + exp_tie)  # in (-1, 1)
+    # Net model preference for i over j, P(i≥j) − P(j≥i), in (-1, 1).
+    # Derived from the Davidson form (exp(s_i) − exp(s_j)) /
+    # (exp(s_i) + exp(s_j) + ν·exp((s_i+s_j)/2)) by dividing through by
+    # exp((s_i+s_j)/2), which leaves a tanh/cosh expression in δ = s_i − s_j that
+    # is finite for any score magnitude (no exp overflow).
+    delta = raw_scores[:, None] - raw_scores[None, :]  # δ = s_i − s_j
+    half = 0.5 * delta
+    # cosh(half) may overflow to inf for very large |δ|; ν/inf → 0 is the intended
+    # limit, so the result stays finite even though numpy warns on the overflow.
+    net_model_pref = 2.0 * np.tanh(half) / (2.0 + nu / np.cosh(half))
 
     ref_diff = reference_scores[:, None] - reference_scores[None, :]
 
@@ -72,7 +76,7 @@ def top_k_discordant(
     row = np.maximum(row, 0.0)  # mask out concordant pairs
 
     total_discordancy = row.sum()
-    if total_discordancy == 0:
+    if total_discordancy <= 0:
         return []
 
     if stochastic:
@@ -191,7 +195,7 @@ class RandomPairDataset(Dataset):
         batch_anchors = dataloader.collate_batch(batch_anchors)
         batch_exemplars = dataloader.collate_batch(chain.from_iterable(batch_exemplars))
         return RandomPairTrainBatch(batch_anchors, batch_exemplars, B, C)
-    
+
 
 class RandomPairDataModule(L.LightningDataModule):
     def __init__(
