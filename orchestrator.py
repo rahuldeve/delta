@@ -69,14 +69,14 @@ class OrchestratorConfig:
     Kept well below 1.0 because a job's footprint can swing ~30% up after it's packed (variable
     batch shapes, pairwise sampling); on a 24 GB card 0.70 leaves ~7 GB to absorb those spikes."""
 
-    settle_seconds: float = 5 * 60
+    settle_seconds: float = 2 * 60
     """Minimum seconds between launches so a new job allocates GPU memory before we measure headroom.
     A 4090 ramps fast and has ample headroom, so we pack roughly every 3 min instead of every 10."""
 
     poll_interval: float = 30.0
     """Seconds between scheduler ticks (reap finished jobs, probe GPU, maybe launch)."""
 
-    max_concurrent: int = 8
+    max_concurrent: int = 4
     """Hard cap on concurrently running subprocesses. On a 24 GB card the limiter is usually CPU
     (each job spawns Ray with num_cpus=4), not VRAM, so this guards against CPU oversubscription."""
 
@@ -431,6 +431,26 @@ class Orchestrator:
         # cpu-only jobs (xgboost) get no GPU.
         env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         env["CUDA_VISIBLE_DEVICES"] = "" if job.cpu_only else str(gpu)
+        # Bound BLAS/OpenMP threads so concurrent jobs don't oversubscribe the cores.
+        # GPU jobs (chemprop/deltaprop) are dataloader-bound -- their parallelism comes
+        # from DataLoader workers, not intra-op math -- so they get a small cap. cpu-only
+        # jobs (xgboost) do their real work in-process and get a fair share of cores.
+        if job.cpu_only:
+            threads = max(1, (os.cpu_count() or 1) // self.cfg.max_cpu_concurrent)
+        else:
+            threads = 2
+        for var in (
+            "OMP_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+        ):
+            env[var] = str(threads)
+        # Idle OpenMP threads must sleep, not busy-spin -- spin-waiting under
+        # oversubscription is the main driver of the ~500k ctx-switches/sec observed
+        # when packing many jobs onto the box.
+        env["OMP_WAIT_POLICY"] = "PASSIVE"
+        env["KMP_BLOCKTIME"] = "0"
         log_file = open(job.log_path, "w")
         job.proc = subprocess.Popen(
             job.argv,

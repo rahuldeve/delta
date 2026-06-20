@@ -18,7 +18,7 @@ def embed_all(mol_dataset: MoleculeDataset, model, scale_X_d: bool = False):
         shuffle=False,
         collate_fn=collate_batch,
         pin_memory=True,
-        num_workers=8
+        num_workers=4,
     )
     all_embeds = []
     for batch in dl:
@@ -93,7 +93,7 @@ def score_all(mol_dataset: MoleculeDataset, model, scale_X_d: bool = False):
         shuffle=False,
         collate_fn=collate_batch,
         pin_memory=True,
-        num_workers=8
+        num_workers=4,
     )
     all_scores = []
     for batch in dl:

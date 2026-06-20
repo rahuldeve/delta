@@ -206,7 +206,7 @@ class RandomPairDataModule(L.LightningDataModule):
         batch_size: int,
         n_candidates: int,
         frac_hard: float = 0.2,
-        num_workers: int = 8,
+        num_workers: int = 4,
         seed: int = 42,
     ) -> None:
         super().__init__()
