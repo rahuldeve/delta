@@ -214,7 +214,7 @@ def gsk_hepg2_data_fraction(
     deltaprop_cf: DeltapropConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
     fractions: tuple[float, ...] = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
-    seeds: tuple[int, ...] = (42, 123, 456, 789, 1011, 1213, 1415, 1617, 1819, 2021),
+    seeds: tuple[int, ...] = (42, 123, 456),
     run_name: str = "gsk_hepg2_data_fraction",
 ):
     """Sweep the training-data fraction on GSK_HEPG2 for chemprop vs deltaprop.
@@ -229,9 +229,6 @@ def gsk_hepg2_data_fraction(
     # This ablation only studies the feature-free (graph-only) setting for now;
     # pin the flag so logged configs reflect reality regardless of CLI input.
     train_cf.use_feats = False
-    # Reduced training budget keeps the multi-seed sweep affordable.
-    train_cf.max_epochs = 40
-    train_cf.early_stopping_patience = 15
 
     init_ablation_run(
         wandb_cf,
