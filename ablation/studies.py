@@ -24,9 +24,14 @@ def db_malaria_candidate_size(
     deltaprop_cf: DeltapropConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
     candidate_sizes: tuple[int, ...] = tuple(range(4, 52, 4)),
+    seeds: tuple[int, ...] = (42, 123, 456),
     run_name: str = "db_malaria_candidate_size",
 ):
-    """Sweep deltaprop's candidate-pool size on DB_MALARIA (SCAFFOLD, graph-only)."""
+    """Sweep deltaprop's candidate-pool size on DB_MALARIA (SCAFFOLD, graph-only).
+
+    The full sweep is repeated once per seed in `seeds`; each seed re-randomizes both
+    the split and model init, so every sweep point gets one measurement per seed.
+    """
     from models.chemprop_bl import ChempropRef
     from models.deltaprop import DeltapropRef
 
@@ -47,43 +52,53 @@ def db_malaria_candidate_size(
         drop_nan_features=True,
     )
 
-    # One SCAFFOLD split shared by every run below.
-    split = single_split(
-        df, train_cf.n_splits, train_cf.random_seed, train_cf.split_type
-    )
-    train_df = split[0]
+    for seed in seeds:
+        train_cf.random_seed = seed
 
-    def log(model_class, model_cf, model_name, candidate_size, label):
-        evaluate_and_log(
-            split=split,
-            df_classification_threshold=df_classification_threshold,
-            model_class=model_class,
-            model_cf=model_cf,
-            model_name=model_name,
-            train_cf=train_cf,
-            wandb_cf=wandb_cf,
-            extra_cols={
-                "candidate_size": candidate_size,
-                "n_train": len(train_df),
-                "model": model_name,
-                "dataset": "DB_MALARIA",
-            },
-            label=label,
+        # One SCAFFOLD split (per seed) shared by every run below.
+        split = single_split(
+            df, train_cf.n_splits, train_cf.random_seed, train_cf.split_type
         )
+        train_df = split[0]
 
-    # chemprop is invariant to candidate_size; run it once as a reference line.
-    log(ChempropRef, chemprop_cf, "chemprop", candidate_size=None, label="baseline")
+        def log(model_class, model_cf, model_name, candidate_size, label):
+            evaluate_and_log(
+                split=split,
+                df_classification_threshold=df_classification_threshold,
+                model_class=model_class,
+                model_cf=model_cf,
+                model_name=model_name,
+                train_cf=train_cf,
+                wandb_cf=wandb_cf,
+                extra_cols={
+                    "candidate_size": candidate_size,
+                    "seed": seed,
+                    "n_train": len(train_df),
+                    "model": model_name,
+                    "dataset": "DB_MALARIA",
+                },
+                label=label,
+            )
 
-    # deltaprop: sweep the candidate-pool size.
-    for candidate_size in candidate_sizes:
-        deltaprop_cf.candidate_size = candidate_size
+        # chemprop is invariant to candidate_size; run it once as a reference line.
         log(
-            DeltapropRef,
-            deltaprop_cf,
-            "deltaprop",
-            candidate_size=candidate_size,
-            label=f"cand{candidate_size}",
+            ChempropRef,
+            chemprop_cf,
+            "chemprop",
+            candidate_size=None,
+            label=f"baseline_seed{seed}",
         )
+
+        # deltaprop: sweep the candidate-pool size.
+        for candidate_size in candidate_sizes:
+            deltaprop_cf.candidate_size = candidate_size
+            log(
+                DeltapropRef,
+                deltaprop_cf,
+                "deltaprop",
+                candidate_size=candidate_size,
+                label=f"cand{candidate_size}_seed{seed}",
+            )
 
     return None
 
@@ -106,9 +121,14 @@ def db_malaria_frac_hard(
         0.9,
         1.0,
     ),
+    seeds: tuple[int, ...] = (42, 123, 456),
     run_name: str = "db_malaria_frac_hard",
 ):
-    """Sweep the hard-negative mining fraction on DB_MALARIA (SCAFFOLD, graph-only)."""
+    """Sweep the hard-negative mining fraction on DB_MALARIA (SCAFFOLD, graph-only).
+
+    The full sweep is repeated once per seed in `seeds`; each seed re-randomizes both
+    the split and model init, so every sweep point gets one measurement per seed.
+    """
     from models.chemprop_bl import ChempropRef
     from models.deltaprop import DeltapropRef
 
@@ -131,43 +151,53 @@ def db_malaria_frac_hard(
         drop_nan_features=True,
     )
 
-    # One SCAFFOLD split shared by every run below.
-    split = single_split(
-        df, train_cf.n_splits, train_cf.random_seed, train_cf.split_type
-    )
-    train_df = split[0]
+    for seed in seeds:
+        train_cf.random_seed = seed
 
-    def log(model_class, model_cf, model_name, frac_hard, label):
-        evaluate_and_log(
-            split=split,
-            df_classification_threshold=df_classification_threshold,
-            model_class=model_class,
-            model_cf=model_cf,
-            model_name=model_name,
-            train_cf=train_cf,
-            wandb_cf=wandb_cf,
-            extra_cols={
-                "frac_hard": frac_hard,
-                "n_train": len(train_df),
-                "model": model_name,
-                "dataset": "DB_MALARIA",
-            },
-            label=label,
+        # One SCAFFOLD split (per seed) shared by every run below.
+        split = single_split(
+            df, train_cf.n_splits, train_cf.random_seed, train_cf.split_type
         )
+        train_df = split[0]
 
-    # chemprop is invariant to frac_hard; run it once as a reference line.
-    log(ChempropRef, chemprop_cf, "chemprop", frac_hard=None, label="baseline")
+        def log(model_class, model_cf, model_name, frac_hard, label):
+            evaluate_and_log(
+                split=split,
+                df_classification_threshold=df_classification_threshold,
+                model_class=model_class,
+                model_cf=model_cf,
+                model_name=model_name,
+                train_cf=train_cf,
+                wandb_cf=wandb_cf,
+                extra_cols={
+                    "frac_hard": frac_hard,
+                    "seed": seed,
+                    "n_train": len(train_df),
+                    "model": model_name,
+                    "dataset": "DB_MALARIA",
+                },
+                label=label,
+            )
 
-    # deltaprop: sweep the hard-negative fraction.
-    for frac_hard in frac_hard_values:
-        deltaprop_cf.frac_hard = frac_hard
+        # chemprop is invariant to frac_hard; run it once as a reference line.
         log(
-            DeltapropRef,
-            deltaprop_cf,
-            "deltaprop",
-            frac_hard=frac_hard,
-            label=f"frac{frac_hard}",
+            ChempropRef,
+            chemprop_cf,
+            "chemprop",
+            frac_hard=None,
+            label=f"baseline_seed{seed}",
         )
+
+        # deltaprop: sweep the hard-negative fraction.
+        for frac_hard in frac_hard_values:
+            deltaprop_cf.frac_hard = frac_hard
+            log(
+                DeltapropRef,
+                deltaprop_cf,
+                "deltaprop",
+                frac_hard=frac_hard,
+                label=f"frac{frac_hard}_seed{seed}",
+            )
 
     return None
 
@@ -178,9 +208,15 @@ def gsk_hepg2_data_fraction(
     deltaprop_cf: DeltapropConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
     fractions: tuple[float, ...] = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+    seeds: tuple[int, ...] = (42, 123, 456),
     run_name: str = "gsk_hepg2_data_fraction",
 ):
-    """Sweep the training-data fraction on GSK_HEPG2 for chemprop vs deltaprop."""
+    """Sweep the training-data fraction on GSK_HEPG2 for chemprop vs deltaprop.
+
+    The full sweep is repeated once per seed in `seeds`; each seed re-randomizes the
+    fraction subsampling, the split, and model init, so every sweep point gets one
+    measurement per seed.
+    """
     from models.chemprop_bl import ChempropRef
     from models.deltaprop import DeltapropRef
 
@@ -205,30 +241,34 @@ def gsk_hepg2_data_fraction(
         ("deltaprop", DeltapropRef, deltaprop_cf),
     ]
 
-    for fraction, sub_df in nested_stratified_fractions(
-        df, fractions, train_cf.random_seed
-    ):
-        split = single_split(
-            sub_df, train_cf.n_splits, train_cf.random_seed, train_cf.split_type
-        )
-        train_df = split[0]
+    for seed in seeds:
+        train_cf.random_seed = seed
 
-        for model_name, model_class, model_cf in models:
-            evaluate_and_log(
-                split=split,
-                df_classification_threshold=df_classification_threshold,
-                model_class=model_class,
-                model_cf=model_cf,
-                model_name=model_name,
-                train_cf=train_cf,
-                wandb_cf=wandb_cf,
-                extra_cols={
-                    "fraction": fraction,
-                    "n_train": len(train_df),
-                    "model": model_name,
-                    "dataset": "GSK_HEPG2",
-                },
-                label=f"frac{int(fraction * 100)}",
+        for fraction, sub_df in nested_stratified_fractions(
+            df, fractions, train_cf.random_seed
+        ):
+            split = single_split(
+                sub_df, train_cf.n_splits, train_cf.random_seed, train_cf.split_type
             )
+            train_df = split[0]
+
+            for model_name, model_class, model_cf in models:
+                evaluate_and_log(
+                    split=split,
+                    df_classification_threshold=df_classification_threshold,
+                    model_class=model_class,
+                    model_cf=model_cf,
+                    model_name=model_name,
+                    train_cf=train_cf,
+                    wandb_cf=wandb_cf,
+                    extra_cols={
+                        "fraction": fraction,
+                        "seed": seed,
+                        "n_train": len(train_df),
+                        "model": model_name,
+                        "dataset": "GSK_HEPG2",
+                    },
+                    label=f"frac{int(fraction * 100)}_seed{seed}",
+                )
 
     return None
