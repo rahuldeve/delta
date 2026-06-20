@@ -76,9 +76,12 @@ class OrchestratorConfig:
     poll_interval: float = 30.0
     """Seconds between scheduler ticks (reap finished jobs, probe GPU, maybe launch)."""
 
-    max_concurrent: int = 4
-    """Hard cap on concurrently running subprocesses. On a 24 GB card the limiter is usually CPU
-    (each job spawns Ray with num_cpus=4), not VRAM, so this guards against CPU oversubscription."""
+    max_concurrent: int = 6
+    """Hard cap on concurrently running subprocesses. GPU jobs are dataloader-bound, so several
+    are packed per card to overlap one job's input-collation gaps with another's compute burst
+    (raising both GPU and CPU utilisation). Per-job thread caps (see launch()) keep this from
+    oversubscribing the cores; size it with num_workers so total dataloader workers stay near the
+    core count, spread across the available GPUs (e.g. 6 jobs x 4 workers ~= 24 cores)."""
 
     max_cpu_concurrent: int = 2
     """Hard cap on concurrent CPU-only jobs (e.g. xgboost). They predict ~0 GPU so they would

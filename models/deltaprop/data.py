@@ -123,6 +123,13 @@ class RandomPairDataset(Dataset):
         self.frac_hard = frac_hard
         self.discordancy_degree = discordancy_degree
 
+        # Precompute the positive/negative candidate index pools once. They depend only on
+        # candidate_dataset.Y and binary_threshold (both fixed for the dataset's lifetime), so
+        # rebuilding them inside get_random_candidates on every __getitem__ was O(N) redundant
+        # work per item -> O(N^2) per epoch in the dataloader workers. Computing them here also
+        # lets forked workers inherit the arrays (copy-on-write) instead of each recomputing.
+        self.pos_class_idxs, self.neg_class_idxs = self._class_index_pools()
+
     def __len__(self):
         return len(self.anchor_dataset)
 
@@ -137,7 +144,12 @@ class RandomPairDataset(Dataset):
 
         return [self.candidate_dataset[idx] for idx in selected_idxs]
 
-    def get_random_candidates(self, n_random: int):
+    def _class_index_pools(self) -> tuple[np.ndarray, np.ndarray]:
+        """Indices of candidate molecules in the positive / negative class.
+
+        Depends only on candidate_dataset.Y and binary_threshold, both fixed at construction,
+        so this is computed once (see __init__) rather than on every __getitem__.
+        """
         targets = self.candidate_dataset.Y.squeeze()
         if isinstance(self.binary_threshold, GT):
             pos_class_mask = targets >= self.binary_threshold.th
@@ -148,6 +160,11 @@ class RandomPairDataset(Dataset):
 
         pos_class_idxs = np.argwhere(pos_class_mask).squeeze()
         neg_class_idxs = np.argwhere(~pos_class_mask).squeeze()
+        return pos_class_idxs, neg_class_idxs
+
+    def get_random_candidates(self, n_random: int):
+        pos_class_idxs = self.pos_class_idxs
+        neg_class_idxs = self.neg_class_idxs
 
         pos_class_sample_count = min(int(0.8 * n_random), pos_class_idxs.shape[0])
         random_pos_class_idxs = np.random.choice(
