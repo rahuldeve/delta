@@ -18,7 +18,7 @@ from ablation.common import (
 )
 
 
-def db_malaria_candidate_size(
+def candidate_size(
     train_cf: TrainConfig,
     chemprop_cf: ChempropConfig,
     deltaprop_cf: DeltapropConfig,
@@ -109,7 +109,7 @@ def db_malaria_candidate_size(
     return None
 
 
-def db_malaria_frac_hard(
+def frac_hard(
     train_cf: TrainConfig,
     chemprop_cf: ChempropConfig,
     deltaprop_cf: DeltapropConfig,
