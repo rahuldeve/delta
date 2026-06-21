@@ -23,17 +23,23 @@ def db_malaria_candidate_size(
     chemprop_cf: ChempropConfig,
     deltaprop_cf: DeltapropConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
+    dataset: SupportedDatasets = SupportedDatasets.DB_MALARIA,
     candidate_sizes: tuple[int, ...] = tuple(range(4, 52, 4)),
-    seeds: tuple[int, ...] = (42, 123, 456, 789, 1011, 1213, 1415, 1617, 1819, 2021),
-    run_name: str = "db_malaria_candidate_size",
+    seeds: tuple[int, ...] = (42, 53, 64, 75, 86),
+    run_name: str | None = None,
 ):
-    """Sweep deltaprop's candidate-pool size on DB_MALARIA (SCAFFOLD, graph-only).
+    """Sweep deltaprop's candidate-pool size on `dataset` (SCAFFOLD, graph-only).
 
     The full sweep is repeated once per seed in `seeds`; each seed re-randomizes both
     the split and model init, so every sweep point gets one measurement per seed.
     """
     from models.chemprop_bl import ChempropRef
     from models.deltaprop import DeltapropRef
+
+    # Default the run name to the dataset so per-dataset runs stay distinguishable;
+    # the plot notebooks select the latest run matching this prefix.
+    if run_name is None:
+        run_name = f"{dataset.name.lower()}_candidate_size"
 
     # Hold the data fixed and sweep the candidate-pool size under the SCAFFOLD
     # split, feature-free. Pin both so the logged configs reflect reality.
@@ -46,11 +52,11 @@ def db_malaria_candidate_size(
     init_ablation_run(
         wandb_cf,
         run_name,
-        extra_tags={"db_malaria", "candidate_size", train_cf.split_type},
+        extra_tags={dataset.name.lower(), "candidate_size", train_cf.split_type},
     )
 
     df, df_classification_threshold = prepare_dataset(
-        SupportedDatasets.DB_MALARIA,
+        dataset,
         use_features=False,
         drop_nan_features=True,
     )
@@ -78,7 +84,7 @@ def db_malaria_candidate_size(
                     "seed": seed,
                     "n_train": len(train_df),
                     "model": model_name,
-                    "dataset": "DB_MALARIA",
+                    "dataset": dataset.name,
                 },
                 label=label,
             )
@@ -111,6 +117,7 @@ def db_malaria_frac_hard(
     chemprop_cf: ChempropConfig,
     deltaprop_cf: DeltapropConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
+    dataset: SupportedDatasets = SupportedDatasets.DB_MALARIA,
     frac_hard_values: tuple[float, ...] = (
         0.0,
         0.1,
@@ -124,16 +131,21 @@ def db_malaria_frac_hard(
         0.9,
         1.0,
     ),
-    seeds: tuple[int, ...] = (42, 123, 456, 789, 1011, 1213, 1415, 1617, 1819, 2021),
-    run_name: str = "db_malaria_frac_hard",
+    seeds: tuple[int, ...] = (42, 53, 64, 75, 86),
+    run_name: str | None = None,
 ):
-    """Sweep the hard-negative mining fraction on DB_MALARIA (SCAFFOLD, graph-only).
+    """Sweep the hard-negative mining fraction on `dataset` (SCAFFOLD, graph-only).
 
     The full sweep is repeated once per seed in `seeds`; each seed re-randomizes both
     the split and model init, so every sweep point gets one measurement per seed.
     """
     from models.chemprop_bl import ChempropRef
     from models.deltaprop import DeltapropRef
+
+    # Default the run name to the dataset so per-dataset runs stay distinguishable;
+    # the plot notebooks select the latest run matching this prefix.
+    if run_name is None:
+        run_name = f"{dataset.name.lower()}_frac_hard"
 
     # Hold the data fixed and sweep the fraction of hard negatives mined into each
     # deltaprop batch under the SCAFFOLD split, feature-free. Pin both so the
@@ -147,12 +159,12 @@ def db_malaria_frac_hard(
     init_ablation_run(
         wandb_cf,
         run_name,
-        extra_tags={"db_malaria", "frac_hard", train_cf.split_type},
+        extra_tags={dataset.name.lower(), "frac_hard", train_cf.split_type},
     )
 
-    # DB_MALARIA is small, so we use the full dataset (no subsampling).
+    # The dataset is used in full (no subsampling).
     df, df_classification_threshold = prepare_dataset(
-        SupportedDatasets.DB_MALARIA,
+        dataset,
         use_features=False,
         drop_nan_features=True,
     )
@@ -180,7 +192,7 @@ def db_malaria_frac_hard(
                     "seed": seed,
                     "n_train": len(train_df),
                     "model": model_name,
-                    "dataset": "DB_MALARIA",
+                    "dataset": dataset.name,
                 },
                 label=label,
             )
@@ -214,7 +226,7 @@ def gsk_hepg2_data_fraction(
     deltaprop_cf: DeltapropConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
     fractions: tuple[float, ...] = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
-    seeds: tuple[int, ...] = (42, 123, 456),
+    seeds: tuple[int, ...] = (42, 53, 64, 75, 86),
     run_name: str = "gsk_hepg2_data_fraction",
 ):
     """Sweep the training-data fraction on GSK_HEPG2 for chemprop vs deltaprop.
