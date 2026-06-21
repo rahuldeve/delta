@@ -24,7 +24,7 @@ def db_malaria_candidate_size(
     deltaprop_cf: DeltapropConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
     dataset: SupportedDatasets = SupportedDatasets.DB_MALARIA,
-    candidate_sizes: tuple[int, ...] = tuple(range(4, 52, 4)),
+    candidate_sizes: tuple[int, ...] = tuple(range(8, 52, 8)),
     seeds: tuple[int, ...] = (42, 53, 64, 75, 86),
     run_name: str | None = None,
 ):
@@ -45,9 +45,6 @@ def db_malaria_candidate_size(
     # split, feature-free. Pin both so the logged configs reflect reality.
     train_cf.use_feats = False
     train_cf.split_type = SplitType.SCAFFOLD
-    # Reduced training budget keeps the multi-seed sweep affordable.
-    train_cf.max_epochs = 40
-    train_cf.early_stopping_patience = 15
 
     init_ablation_run(
         wandb_cf,
@@ -120,15 +117,10 @@ def db_malaria_frac_hard(
     dataset: SupportedDatasets = SupportedDatasets.DB_MALARIA,
     frac_hard_values: tuple[float, ...] = (
         0.0,
-        0.1,
         0.2,
-        0.3,
         0.4,
-        0.5,
         0.6,
-        0.7,
         0.8,
-        0.9,
         1.0,
     ),
     seeds: tuple[int, ...] = (42, 53, 64, 75, 86),
@@ -152,9 +144,6 @@ def db_malaria_frac_hard(
     # logged configs reflect reality.
     train_cf.use_feats = False
     train_cf.split_type = SplitType.SCAFFOLD
-    # Reduced training budget keeps the multi-seed sweep affordable.
-    train_cf.max_epochs = 40
-    train_cf.early_stopping_patience = 15
 
     init_ablation_run(
         wandb_cf,
@@ -225,7 +214,7 @@ def gsk_hepg2_data_fraction(
     chemprop_cf: ChempropConfig,
     deltaprop_cf: DeltapropConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
-    fractions: tuple[float, ...] = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+    fractions: tuple[float, ...] = (0.2, 0.4, 0.6, 0.8, 1.0),
     seeds: tuple[int, ...] = (42, 53, 64, 75, 86),
     run_name: str = "gsk_hepg2_data_fraction",
 ):
