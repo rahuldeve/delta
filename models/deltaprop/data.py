@@ -7,7 +7,6 @@ import torch
 from chemprop.data import MoleculeDataset, collate, dataloader, datasets
 from torch.utils.data import DataLoader, Dataset
 
-from data import GT, LT, DSThreshold
 from models.deltaprop.utils import score_all
 
 
@@ -110,7 +109,6 @@ class RandomPairDataset(Dataset):
         self,
         anchor_dataset: MoleculeDataset,
         candidate_dataset: MoleculeDataset,
-        binary_threshold: DSThreshold,
         n_candidates: int,
         frac_hard: float = 0.2,
         discordancy_degree: np.ndarray | None = None,
@@ -118,90 +116,41 @@ class RandomPairDataset(Dataset):
         super().__init__()
         self.anchor_dataset = anchor_dataset
         self.candidate_dataset = candidate_dataset
-        self.binary_threshold = binary_threshold
         self.n_candidates = n_candidates
         self.frac_hard = frac_hard
         self.discordancy_degree = discordancy_degree
 
-        # Precompute the positive/negative candidate index pools once. They depend only on
-        # candidate_dataset.Y and binary_threshold (both fixed for the dataset's lifetime), so
-        # rebuilding them inside get_random_candidates on every __getitem__ was O(N) redundant
-        # work per item -> O(N^2) per epoch in the dataloader workers. Computing them here also
-        # lets forked workers inherit the arrays (copy-on-write) instead of each recomputing.
-        self.pos_class_idxs, self.neg_class_idxs = self._class_index_pools()
-
     def __len__(self):
         return len(self.anchor_dataset)
 
-    def get_hard_neg_candidates(self, idx: int, n: int):
-        if self.discordancy_degree is None:
+    def get_hard_neg_idxs(self, idx: int, n: int) -> list[int]:
+        if self.discordancy_degree is None or n == 0:
             return []
 
-        if n == 0:
-            return []
+        return top_k_discordant(self.discordancy_degree, idx, n)
 
-        selected_idxs = top_k_discordant(self.discordancy_degree, idx, n)
-
-        return [self.candidate_dataset[idx] for idx in selected_idxs]
-
-    def _class_index_pools(self) -> tuple[np.ndarray, np.ndarray]:
-        """Indices of candidate molecules in the positive / negative class.
-
-        Depends only on candidate_dataset.Y and binary_threshold, both fixed at construction,
-        so this is computed once (see __init__) rather than on every __getitem__.
-        """
-        targets = self.candidate_dataset.Y.squeeze()
-        if isinstance(self.binary_threshold, GT):
-            pos_class_mask = targets >= self.binary_threshold.th
-        elif isinstance(self.binary_threshold, LT):
-            pos_class_mask = targets <= self.binary_threshold.th
-        else:
-            raise ValueError(self.binary_threshold)
-
-        pos_class_idxs = np.argwhere(pos_class_mask).squeeze()
-        neg_class_idxs = np.argwhere(~pos_class_mask).squeeze()
-        return pos_class_idxs, neg_class_idxs
-
-    def get_random_candidates(self, n_random: int):
-        pos_class_idxs = self.pos_class_idxs
-        neg_class_idxs = self.neg_class_idxs
-
-        pos_class_sample_count = min(int(0.8 * n_random), pos_class_idxs.shape[0])
-        random_pos_class_idxs = np.random.choice(
-            pos_class_idxs,
-            size=(pos_class_sample_count,),
-            replace=False,
+    def get_random_candidates(self, n_random: int, exclude: np.ndarray):
+        # Draw uniformly from all candidates, skipping indices already chosen as
+        # hard negatives so the same molecule can't appear twice for one anchor.
+        available = np.setdiff1d(
+            np.arange(len(self.candidate_dataset)), exclude, assume_unique=True
         )
-        random_pos_candidates = [
-            self.candidate_dataset[idx] for idx in random_pos_class_idxs
-        ]
-
-        neg_class_sample_count = min(
-            n_random - pos_class_sample_count, neg_class_idxs.shape[0]
-        )
-        random_neg_class_idxs = np.random.choice(
-            neg_class_idxs,
-            size=(neg_class_sample_count,),
-            replace=False,
-        )
-        random_neg_candidates = [
-            self.candidate_dataset[idx] for idx in random_neg_class_idxs
-        ]
-
-        return random_pos_candidates + random_neg_candidates
+        n_sample = min(n_random, available.shape[0])
+        random_idxs = np.random.choice(available, size=n_sample, replace=False)
+        return [self.candidate_dataset[idx] for idx in random_idxs]
 
     def __getitem__(self, idx) -> RandomPairDataPoint:
-        hard_neg_candidates = self.get_hard_neg_candidates(
+        hard_neg_idxs = self.get_hard_neg_idxs(
             idx, int(self.frac_hard * self.n_candidates)
         )
         random_candidates = self.get_random_candidates(
-            self.n_candidates - len(hard_neg_candidates)
+            self.n_candidates - len(hard_neg_idxs),
+            exclude=np.asarray(hard_neg_idxs, dtype=int),
         )
-        # random_candidates = self.get_random_candidates(self.n_candidates)
+        hard_neg_candidates = [self.candidate_dataset[i] for i in hard_neg_idxs]
         return RandomPairDataPoint(
             self.anchor_dataset[idx],
             hard_neg_candidates + random_candidates,
-            # random_candidates
         )
 
     @staticmethod
@@ -219,7 +168,6 @@ class RandomPairDataModule(L.LightningDataModule):
         self,
         train_mol_ds: MoleculeDataset,
         val_mol_ds: MoleculeDataset,
-        binary_threshold: DSThreshold,
         batch_size: int,
         n_candidates: int,
         frac_hard: float = 0.2,
@@ -231,7 +179,6 @@ class RandomPairDataModule(L.LightningDataModule):
         self.train_ds = RandomPairDataset(
             anchor_dataset=train_mol_ds,
             candidate_dataset=train_mol_ds,
-            binary_threshold=binary_threshold,
             n_candidates=n_candidates,
             frac_hard=frac_hard,
         )
@@ -239,7 +186,6 @@ class RandomPairDataModule(L.LightningDataModule):
         self.val_ds = RandomPairDataset(
             anchor_dataset=val_mol_ds,
             candidate_dataset=train_mol_ds,
-            binary_threshold=binary_threshold,
             n_candidates=n_candidates,
             frac_hard=frac_hard,
         )

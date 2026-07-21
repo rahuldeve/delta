@@ -143,7 +143,6 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         datamodule = RandomPairDataModule(
             train_mol_ds=train_split,
             val_mol_ds=val_split,
-            binary_threshold=df_classification_threshold,
             batch_size=train_config.batch_size,
             n_candidates=model_config.candidate_size,
             frac_hard=model_config.frac_hard,
