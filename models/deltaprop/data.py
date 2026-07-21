@@ -1,106 +1,153 @@
 import random
+from dataclasses import dataclass
 from itertools import chain
 from typing import NamedTuple
+
 import lightning as L
 import numpy as np
 import torch
-from chemprop.data import MoleculeDataset, collate, dataloader, datasets
+from chemprop.data import (
+    BatchMolGraph,
+    MoleculeDatapoint,
+    MolGraph,
+    MoleculeDataset,
+    dataloader
+)
+from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 
 from data import GT, LT, DSThreshold
-from models.deltaprop.utils import score_all
+from models.deltaprop.utils import build_discordancy_matrix, score_all, top_k_discordant
 
 
-def build_discordancy_matrix(
-    raw_scores: np.ndarray,
-    reference_scores: np.ndarray,
-    nu: float,
-) -> np.ndarray:
-    # Fail loudly if the model diverged — this is the only remaining NaN source
-    # once the math below is stable, and silently swallowing it would hide it.
-    if not np.isfinite(raw_scores).all():
-        raise ValueError("raw_scores contains non-finite values (model diverged?)")
+class DeltaDatum(NamedTuple):
+    """A single training data point carrying both a continuous and a binary target.
 
-    # Net model preference for i over j, P(i≥j) − P(j≥i), in (-1, 1).
-    # Derived from the Davidson form (exp(s_i) − exp(s_j)) /
-    # (exp(s_i) + exp(s_j) + ν·exp((s_i+s_j)/2)) by dividing through by
-    # exp((s_i+s_j)/2), which leaves a tanh/cosh expression in δ = s_i − s_j that
-    # is finite for any score magnitude (no exp overflow).
-    delta = raw_scores[:, None] - raw_scores[None, :]  # δ = s_i − s_j
-    half = 0.5 * delta
-    # cosh(half) may overflow to inf for very large |δ|; ν/inf → 0 is the intended
-    # limit, so the result stays finite even though numpy warns on the overflow.
-    net_model_pref = 2.0 * np.tanh(half) / (2.0 + nu / np.cosh(half))
-
-    ref_diff = reference_scores[:, None] - reference_scores[None, :]
-
-    D = -(ref_diff * net_model_pref)
-    np.fill_diagonal(D, 0.0)
-    return D
-
-
-def top_k_discordant(
-    D: np.ndarray,
-    i: int,
-    k: int,
-    stochastic: bool = True,
-    temperature: float = 2.0,
-) -> list[int]:
+    Mirrors :class:`chemprop.data.Datum` with its single ``y`` replaced by
+    ``reg_y`` (continuous / regression target) and ``bin_y`` (binary label).
     """
-    Return up to k indices most discordant with index i.
 
-    Args:
-        D:           (N, N) discordancy matrix from build_discordancy_matrix.
-        i:           Query index.
-        k:           Maximum number of hard negatives to return.
-        stochastic:  If True, sample proportional to discordancy (with temperature).
-                     If False, return strict top-k by discordancy.
-        temperature: Controls the sharpness of the sampling distribution.
-                     - 1.0  → sample proportional to raw discordancy (default)
-                     - >1.0 → flatter distribution, more exploration
-                     - <1.0 → sharper distribution, closer to top-k behaviour
-                     Must be > 0. Only used when stochastic=True.
+    mg: MolGraph
+    V_d: np.ndarray | None
+    x_d: np.ndarray | None
+    reg_y: np.ndarray | None
+    bin_y: np.ndarray | None
+    weight: float
+    lt_mask: np.ndarray | None
+    gt_mask: np.ndarray | None
 
-    Returns:
-        List of at most k indices j ≠ i, sorted by discordancy descending.
+
+@dataclass
+class DeltaMoleculeDatapoint(MoleculeDatapoint):
+    """A :class:`~chemprop.data.MoleculeDatapoint` that also carries a binary target.
+
+    The inherited ``y`` holds the continuous target — by default ``Y`` (and hence
+    :attr:`DeltaDatum.reg_y`) is pegged to the regression target — so chemprop's
+    ``_Y``/``Y``/``normalize_targets`` machinery keeps working unchanged. The binary
+    label rides alongside it in ``bin_y``.
     """
-    if not (0 <= i < D.shape[0]):
-        raise IndexError(f"Index {i} out of bounds for matrix of size {D.shape[0]}.")
-    if k <= 0:
-        return []
-    if temperature <= 0:
-        raise ValueError(f"Temperature must be > 0, got {temperature}.")
 
-    row = D[i].copy()
-    row[i] = 0.0
-    row = np.maximum(row, 0.0)  # mask out concordant pairs
+    bin_y: np.ndarray | None = None
 
-    total_discordancy = row.sum()
-    if total_discordancy <= 0:
-        return []
 
-    if stochastic:
-        row = row ** (1.0 / temperature)
-        probs = row / row.sum()
-        n_available = int((row > 0).sum())
-        n_sample = min(k, n_available)
-        chosen = np.random.choice(len(row), size=n_sample, replace=False, p=probs)
-        chosen = sorted(chosen, key=lambda j: D[i, j], reverse=True)
-    else:
-        chosen = np.argsort(row)[::-1]
-        chosen = [j for j in chosen if row[j] > 0][:k]
+class DeltaMoleculeDataset(MoleculeDataset):
+    """A :class:`~chemprop.data.MoleculeDataset` that yields :class:`DeltaDatum`\\s.
 
-    return [int(j) for j in chosen]
+    Adds a parallel ``bin_Y`` binary-target array (backed by each datapoint's
+    ``bin_y``) next to the inherited continuous ``Y``, following the same pattern
+    chemprop uses for the extra target arrays in ``MolAtomBondDataset``. By default
+    ``Y`` is pegged to the regression target.
+    """
+
+    data: list[DeltaMoleculeDatapoint]  # type: ignore
+
+    def __getitem__(self, idx: int) -> DeltaDatum:  # type: ignore
+        d = self.data[idx]
+        mg = self.mg_cache[idx]
+
+        return DeltaDatum(
+            mg,
+            self.V_ds[idx],
+            self.X_d[idx],
+            # by default Y is pegged to the regression target (the datapoint's `y`)
+            self.Y[idx],
+            self.bin_Y[idx],
+            d.weight,
+            d.lt_mask,
+            d.gt_mask,
+        )
+
+    @property
+    def _bin_Y(self) -> np.ndarray:
+        """the raw binary targets of the dataset"""
+        return np.array([d.bin_y for d in self.data], float)
+
+    @property
+    def bin_Y(self) -> np.ndarray:
+        """the binary targets of the dataset"""
+        return self.__bin_Y
+
+    @bin_Y.setter
+    def bin_Y(self, bin_Y):
+        self._validate_attribute(bin_Y, "binary targets")
+
+        self.__bin_Y = np.array(bin_Y, float)
+
+    def reset(self):
+        """Reset the dataset's targets and features to their initial values.
+
+        ``MoleculeDataset.__post_init__`` calls ``reset()``, so this is what
+        populates ``bin_Y`` at construction time.
+        """
+        super().reset()
+        self.__bin_Y = self._bin_Y
+
+
+class DeltaTrainingBatch(NamedTuple):
+    """A batch of :class:`DeltaDatum`\\s.
+
+    Mirrors :class:`chemprop.data.TrainingBatch` with its single ``Y`` replaced by
+    ``reg_Y`` (continuous) and ``bin_Y`` (binary).
+    """
+
+    bmg: BatchMolGraph
+    V_d: Tensor | None
+    X_d: Tensor | None
+    reg_Y: Tensor | None
+    bin_Y: Tensor | None
+    w: Tensor
+    lt_mask: Tensor | None
+    gt_mask: Tensor | None
+
+
+def delta_collate_batch(batch) -> DeltaTrainingBatch:
+    """Collate an iterable of :class:`DeltaDatum`\\s into a :class:`DeltaTrainingBatch`.
+
+    Mirrors :func:`chemprop.data.collate_batch`; the unpack order matches
+    :class:`DeltaDatum`.
+    """
+    mgs, V_ds, x_ds, reg_ys, bin_ys, weights, lt_masks, gt_masks = zip(*batch)
+
+    return DeltaTrainingBatch(
+        BatchMolGraph(mgs),
+        None if V_ds[0] is None else torch.from_numpy(np.concatenate(V_ds)).float(),
+        None if x_ds[0] is None else torch.from_numpy(np.array(x_ds)).float(),
+        None if reg_ys[0] is None else torch.from_numpy(np.array(reg_ys)).float(),
+        None if bin_ys[0] is None else torch.from_numpy(np.array(bin_ys)).float(),
+        torch.tensor(weights, dtype=torch.float).unsqueeze(1),
+        None if lt_masks[0] is None else torch.from_numpy(np.array(lt_masks)),
+        None if gt_masks[0] is None else torch.from_numpy(np.array(gt_masks)),
+    )
 
 
 class RandomPairDataPoint(NamedTuple):
-    anchor: datasets.Datum
-    candidates: list[datasets.Datum]
+    anchor: DeltaDatum
+    candidates: list[DeltaDatum]
 
 
 class RandomPairTrainBatch(NamedTuple):
-    anchor: collate.TrainingBatch
-    candidates: collate.TrainingBatch
+    anchor: DeltaTrainingBatch
+    candidates: DeltaTrainingBatch
     B: int
     C: int
 
@@ -108,8 +155,8 @@ class RandomPairTrainBatch(NamedTuple):
 class RandomPairDataset(Dataset):
     def __init__(
         self,
-        anchor_dataset: MoleculeDataset,
-        candidate_dataset: MoleculeDataset,
+        anchor_dataset: DeltaMoleculeDataset,
+        candidate_dataset: DeltaMoleculeDataset,
         binary_threshold: DSThreshold,
         n_candidates: int,
         frac_hard: float = 0.2,
