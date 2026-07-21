@@ -30,6 +30,10 @@ class DeltapropConfig(ModelConfig):
     encoder_dropout: float = 0.1
     batch_norm: bool = False
     interaction_dropout: float = 0.0
+    classifier_hidden_dim: int = 300
+    classifier_n_layers: int = 1
+    classifier_dropout: float = 0.0
+    ranking_loss_weight: float = 1.0
     candidate_size: int = 32
     frac_hard: float = 0.2
     use_chameleon_mp: bool = False

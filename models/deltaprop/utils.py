@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from chemprop.data import MoleculeDataset, collate_batch
+from chemprop.data import MoleculeDataset
 from pytorch_lightning.utilities import move_data_to_device
 
 from data import GT, DSThreshold
@@ -12,19 +12,22 @@ def embed_all(mol_dataset: MoleculeDataset, model, scale_X_d: bool = False):
     if not scale_X_d:
         model.X_d_transform.train()
 
+    # Imported lazily to avoid the data.py <-> utils.py circular import (data.py imports score_all).
+    from models.deltaprop.data import delta_collate_batch
+
     dl = torch.utils.data.DataLoader(
         mol_dataset,
         batch_size=256,
         shuffle=False,
-        collate_fn=collate_batch,
+        collate_fn=delta_collate_batch,
         pin_memory=True,
         num_workers=4,
     )
     all_embeds = []
     for batch in dl:
         batch = move_data_to_device(batch, model.device)
-        res = model.embed_simple_batch(batch)
-        all_embeds.append(res["embeds"].cpu())
+        # field-name access keeps this agnostic to the extra bin_Y field
+        all_embeds.append(model.encoding(batch.bmg, batch.V_d, batch.X_d).cpu())
 
     all_embeds = torch.cat(all_embeds)
     return all_embeds
@@ -83,27 +86,24 @@ def class_mean_probs(
 
 @torch.no_grad()
 def score_all(mol_dataset: MoleculeDataset, model, scale_X_d: bool = False):
-    model.eval()
-    if not scale_X_d:
-        model.X_d_transform.train()
+    """Ranking-head strength score (projector output) per molecule, shape ``(N, 1)``."""
+    embeds = embed_all(mol_dataset, model, scale_X_d)
+    return model.interaction.projector(embeds.to(model.device)).cpu()
 
-    dl = torch.utils.data.DataLoader(
-        mol_dataset,
-        batch_size=256,
-        shuffle=False,
-        collate_fn=collate_batch,
-        pin_memory=True,
-        num_workers=4,
-    )
-    all_scores = []
-    for batch in dl:
-        batch = move_data_to_device(batch, model.device)
-        res = model.embed_simple_batch(batch)
-        scores = model.interaction.projector(res["embeds"])
-        all_scores.append(scores.cpu())
 
-    all_scores = torch.cat(all_scores)
-    return all_scores
+@torch.no_grad()
+def classifier_probs(
+    mol_dataset: MoleculeDataset, model, scale_X_d: bool = False
+) -> "np.typing.NDArray[np.float64]":
+    """Binary probabilities from the classification head, one per molecule.
+
+    A direct ``sigmoid(classifier(Z))`` — no train reference set and no
+    ``DSThreshold`` needed, since ``bin_y`` already encodes the positive-class
+    direction. ``scale_X_d`` follows the same convention as :func:`embed_all`.
+    """
+    embeds = embed_all(mol_dataset, model, scale_X_d)
+    logits = model.classifier(embeds.to(model.device))
+    return logits.sigmoid().cpu().numpy()
 
 
 def build_discordancy_matrix(

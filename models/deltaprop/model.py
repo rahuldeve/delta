@@ -15,7 +15,7 @@ from lightning import pytorch as pl
 from lightning.pytorch.core.mixins.hparams_mixin import HyperparametersMixin
 from torch import Tensor, nn, optim
 
-from models.deltaprop.data import RandomPairTrainBatch
+from models.deltaprop.data import DeltaPairTrainBatch
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +145,43 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
         return loss
 
 
+class Classifier(nn.Module, HyperparametersMixin):
+    """Binary classification head over encoder embeddings.
+
+    Consumes the encoder embedding ``Z`` and produces a single binary logit.
+    Trained only on *anchor* datapoints against their binary labels (``bin_y``)
+    with BCE. Fully independent of the Davidson ranking head (:class:`Interaction`).
+    """
+
+    def __init__(
+        self,
+        input_dim: int = DEFAULT_HIDDEN_DIM,
+        hidden_dim: int = DEFAULT_HIDDEN_DIM,
+        n_layers: int = 1,
+        dropout: float = 0.0,
+        activation: str | nn.Module = "relu",
+    ) -> None:
+        super().__init__()
+        # mirror Encoder/Interaction: keep `activation` and `cls` in hparams so the
+        # head can be reconstructed from a checkpoint.
+        ignore_list = ["activation"]
+        self.save_hyperparameters(ignore=ignore_list)
+        self.hparams["activation"] = activation
+        self.hparams["cls"] = self.__class__
+
+        self.ffn = MLP.build(input_dim, 1, hidden_dim, n_layers, dropout, activation)
+        self.loss_fn = nn.BCEWithLogitsLoss()
+
+    def forward(self, Z: Tensor) -> Tensor:
+        """Return per-molecule binary logits of shape ``(N,)``."""
+        return self.ffn(Z).squeeze(-1)
+
+    def classification_loss(self, Z_anchor: Tensor, bin_target_anchor: Tensor) -> Tensor:
+        logits = self(Z_anchor)
+        labels = bin_target_anchor.view(-1).float()
+        return self.loss_fn(logits, labels)
+
+
 class DeltaProp(pl.LightningModule):
     def __init__(
         self,
@@ -152,7 +189,9 @@ class DeltaProp(pl.LightningModule):
         agg: Aggregation,
         encoder: Encoder,
         interaction: Interaction,
+        classifier: Classifier,
         batch_norm: bool = False,
+        ranking_loss_weight: float = 1.0,
         warmup_epochs: int = 2,
         init_lr: float = 1e-4,
         max_lr: float = 1e-3,
@@ -161,7 +200,14 @@ class DeltaProp(pl.LightningModule):
     ) -> None:
         super().__init__()
         self.save_hyperparameters(
-            ignore=["X_d_transform", "message_passing", "agg", "encoder", "interaction"]
+            ignore=[
+                "X_d_transform",
+                "message_passing",
+                "agg",
+                "encoder",
+                "interaction",
+                "classifier",
+            ]
         )
         self.hparams["X_d_transform"] = X_d_transform
         self.hparams.update(
@@ -170,6 +216,7 @@ class DeltaProp(pl.LightningModule):
                 "agg": agg.hparams,
                 "encoder": encoder.hparams,
                 "interaction": interaction.hparams,
+                "classifier": classifier.hparams,
             }
         )
 
@@ -177,6 +224,8 @@ class DeltaProp(pl.LightningModule):
         self.agg = agg
         self.encoder = encoder
         self.interaction = interaction
+        self.classifier = classifier
+        self.ranking_loss_weight = ranking_loss_weight
 
         self.bn = (
             nn.BatchNorm1d(self.message_passing.output_dim)
@@ -221,20 +270,30 @@ class DeltaProp(pl.LightningModule):
         Z = self.encoding(bmg, V_d, X_d)
         return dict(embeds=Z, targets=target)
 
-    def get_losses(self, batch: RandomPairTrainBatch):
+    def get_losses(self, batch: DeltaPairTrainBatch):
         B, C = batch.B, batch.C
 
-        bmg, V_d, X_d, target_anchor, _, _, _ = batch.anchor
+        # DeltaTrainingBatch: (bmg, V_d, X_d, reg_Y, bin_Y, w, lt_mask, gt_mask).
+        # reg_Y (continuous) drives the ranking head; bin_Y (binary) the classifier.
+        bmg, V_d, X_d, reg_target_anchor, bin_target_anchor, _, _, _ = batch.anchor
         Z_anchor = self.encoding(bmg, V_d, X_d)
 
-        bmg, V_d, X_d, target_candidates, _, _, _ = batch.candidates
+        bmg, V_d, X_d, reg_target_candidates, _, _, _, _ = batch.candidates
         Z_candidates = self.encoding(bmg, V_d, X_d)
 
-        loss = self.interaction.interaction_loss(
-            Z_anchor, Z_candidates, target_anchor, target_candidates, B, C
+        # Ranking head: Davidson logits over anchor/candidate continuous targets.
+        ranking_loss = self.interaction.interaction_loss(
+            Z_anchor, Z_candidates, reg_target_anchor, reg_target_candidates, B, C
         )
 
-        return loss
+        # Classification head: binary classification of anchors only, against bin_y.
+        classification_loss = self.classifier.classification_loss(
+            Z_anchor, bin_target_anchor # type: ignore
+        )
+
+        loss = classification_loss + ranking_loss * self.ranking_loss_weight
+
+        return loss, ranking_loss, classification_loss
 
     def on_validation_model_eval(self) -> None:
         self.eval()
@@ -242,14 +301,28 @@ class DeltaProp(pl.LightningModule):
         self.message_passing.graph_transform.train()  # type: ignore
         self.X_d_transform.train()
 
-    def training_step(self, batch: RandomPairTrainBatch, batch_idx):  # type: ignore
-        loss = self.get_losses(batch)
+    def training_step(self, batch: DeltaPairTrainBatch, batch_idx):  # type: ignore
+        loss, ranking_loss, classification_loss = self.get_losses(batch)
         self.log("train_loss", loss, batch_size=batch.B, prog_bar=True, on_epoch=True)
+        self.log("train_ranking_loss", ranking_loss, batch_size=batch.B, on_epoch=True)
+        self.log(
+            "train_classification_loss",
+            classification_loss,
+            batch_size=batch.B,
+            on_epoch=True,
+        )
         return loss
 
-    def validation_step(self, batch: RandomPairTrainBatch, batch_idx):  # type: ignore
-        loss = self.get_losses(batch)
+    def validation_step(self, batch: DeltaPairTrainBatch, batch_idx):  # type: ignore
+        loss, ranking_loss, classification_loss = self.get_losses(batch)
         self.log("val_loss", loss, batch_size=batch.B, prog_bar=True, on_epoch=True)
+        self.log("val_ranking_loss", ranking_loss, batch_size=batch.B, on_epoch=True)
+        self.log(
+            "val_classification_loss",
+            classification_loss,
+            batch_size=batch.B,
+            on_epoch=True,
+        )
         return loss
     
     def configure_optimizers(self):  # type: ignore
@@ -301,7 +374,7 @@ class DeltaProp(pl.LightningModule):
 
         submodules |= {
             key: hparams[key].pop("cls")(**hparams[key])
-            for key in ("message_passing", "agg", "encoder", "interaction")
+            for key in ("message_passing", "agg", "encoder", "interaction", "classifier")
             if key not in submodules
         }
 
@@ -319,7 +392,7 @@ class DeltaProp(pl.LightningModule):
         submodules = {
             k: v
             for k, v in kwargs.items()
-            if k in ["message_passing", "agg", "encoder", "interaction"]
+            if k in ["message_passing", "agg", "encoder", "interaction", "classifier"]
         }
         submodules, state_dict, hparams = cls._load(
             checkpoint_path, map_location, **submodules

@@ -6,7 +6,7 @@ import lightning as L
 import numpy as np
 import pandas as pd
 import torch
-from chemprop.data import MoleculeDatapoint, MoleculeDataset
+from chemprop.data import MoleculeDataset
 from chemprop.featurizers import SimpleMoleculeMolGraphFeaturizer
 from chemprop.nn import (
     BondMessagePassing,
@@ -22,9 +22,13 @@ from config import TrainConfig
 from data import DSThreshold
 from models.abc import PreparedDatasetSplit, RefModel
 from models.config import DeltapropConfig
-from models.deltaprop.data import RandomPairDataModule
-from models.deltaprop.model import DeltaProp, Encoder, Interaction
-from models.deltaprop.utils import class_mean_probs, embed_all
+from models.deltaprop.data import (
+    DeltaMoleculeDatapoint,
+    DeltaMoleculeDataset,
+    RandomPairDataModule,
+)
+from models.deltaprop.model import Classifier, DeltaProp, Encoder, Interaction
+from models.deltaprop.utils import classifier_probs
 
 
 def get_molecule_datapoint(row):
@@ -34,8 +38,13 @@ def get_molecule_datapoint(row):
     else:
         feat_array = None
 
-    return MoleculeDatapoint(
-        mol=row["mol"], y=np.array([row["cont_target"]]), x_d=feat_array
+    return DeltaMoleculeDatapoint(
+        mol=row["mol"],
+        # `y` (the continuous target) is pegged to reg_Y and drives the ranking
+        # head; `bin_y` (the binary label) feeds the classification head.
+        y=np.array([row["cont_target"]]),
+        bin_y=np.array([row["bin_target"]], dtype=float),
+        x_d=feat_array,
     )
 
 
@@ -57,9 +66,9 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         test_dps = test_df.apply(get_molecule_datapoint, axis=1).tolist()
 
         featurizer = SimpleMoleculeMolGraphFeaturizer()
-        train_mol_dataset = MoleculeDataset(train_dps, featurizer=featurizer)
-        val_mol_dataset = MoleculeDataset(val_dps, featurizer=featurizer)
-        test_mol_dataset = MoleculeDataset(test_dps, featurizer=featurizer)
+        train_mol_dataset = DeltaMoleculeDataset(train_dps, featurizer=featurizer)
+        val_mol_dataset = DeltaMoleculeDataset(val_dps, featurizer=featurizer)
+        test_mol_dataset = DeltaMoleculeDataset(test_dps, featurizer=featurizer)
 
         X_d_scaler = train_mol_dataset.normalize_inputs("X_d")
         val_mol_dataset.normalize_inputs("X_d", X_d_scaler)
@@ -113,6 +122,13 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         interaction = Interaction(
             encoder.output_dim, dropout=model_config.interaction_dropout
         )
+        classifier = Classifier(
+            encoder.output_dim,
+            hidden_dim=model_config.classifier_hidden_dim,
+            n_layers=model_config.classifier_n_layers,
+            dropout=model_config.classifier_dropout,
+            activation="elu",
+        )
 
         X_d_transform = (
             ScaleTransform.from_standard_scaler(X_d_scaler)
@@ -124,8 +140,10 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             agg,
             encoder,
             interaction,
+            classifier,
             X_d_transform=X_d_transform,
             batch_norm=model_config.batch_norm,
+            ranking_loss_weight=model_config.ranking_loss_weight,
         )
 
         return DeltapropRef(model)
@@ -143,7 +161,6 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         datamodule = RandomPairDataModule(
             train_mol_ds=train_split,
             val_mol_ds=val_split,
-            binary_threshold=df_classification_threshold,
             batch_size=train_config.batch_size,
             n_candidates=model_config.candidate_size,
             frac_hard=model_config.frac_hard,
@@ -197,17 +214,12 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         model = self.model
         model.eval()
 
-        train_embeds = embed_all(train_split, model)
-        val_embeds = embed_all(val_split, model)
+        # Probabilities come straight from the classification head; val X_d is
+        # pre-scaled in prepare_splits, so scale_X_d stays False (the default).
+        pred_probs = classifier_probs(val_split, model)
 
-        pred_probs = class_mean_probs(
-            model,
-            train_embeds,
-            val_embeds,
-            train_labels,
-            df_classification_threshold,
-        )
-
+        # A direct sigmoid classifier's optimal threshold can sit above 0.5, so scan
+        # the full (0.05, 0.95) range rather than the ~0.5-centered class-mean range.
         thresholds = np.round(np.arange(0.05, 0.55, 0.05), 2)
         optimal_threshold = optimize_threshold_from_predictions(
             labels=val_labels,
@@ -232,19 +244,11 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         model = self.model
         model.eval()
 
-        # train is the reference set and is always pre-scaled in-place
-        # (scale_X_d=False). The scored split (`test_split`) is raw for the test
-        # set but pre-scaled for the val set; `split_X_d_prescaled` avoids
-        # double-scaling its features.
-        train_embeds = embed_all(train_split, model)
-        test_embeds = embed_all(test_split, model, scale_X_d=not split_X_d_prescaled)
-
-        pred_probs = class_mean_probs(
-            model,
-            train_embeds,
-            test_embeds,
-            train_labels,
-            df_classification_threshold,
+        # Probabilities come straight from the classification head. `test_split` is
+        # raw for the test set but pre-scaled for the val set; `split_X_d_prescaled`
+        # avoids double-scaling its features.
+        pred_probs = classifier_probs(
+            test_split, model, scale_X_d=not split_X_d_prescaled
         )
 
         preds = (pred_probs >= binary_classification_threshold).astype(float)
