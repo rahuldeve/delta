@@ -173,7 +173,7 @@ class RandomPairDataset(Dataset):
             pos_class_idxs = pos_class_idxs[~np.isin(pos_class_idxs, exclude_arr)]
             neg_class_idxs = neg_class_idxs[~np.isin(neg_class_idxs, exclude_arr)]
 
-        pos_class_sample_count = min(int(0.8 * n_random), pos_class_idxs.shape[0])
+        pos_class_sample_count = min(int(0.5 * n_random), pos_class_idxs.shape[0])
         random_pos_class_idxs = np.random.choice(
             pos_class_idxs,
             size=(pos_class_sample_count,),
