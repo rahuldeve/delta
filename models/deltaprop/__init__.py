@@ -27,7 +27,7 @@ from models.deltaprop.data import (
     DeltaMoleculeDataset,
     RandomPairDataModule,
 )
-from models.deltaprop.model import Classifier, DeltaProp, Encoder, Interaction
+from models.deltaprop.model import DeltaProp, Encoder, Interaction, TiedClassifier
 from models.deltaprop.utils import classifier_probs
 
 
@@ -122,13 +122,12 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         interaction = Interaction(
             encoder.output_dim, dropout=model_config.interaction_dropout
         )
-        classifier = Classifier(
-            encoder.output_dim,
-            hidden_dim=model_config.classifier_hidden_dim,
-            n_layers=model_config.classifier_n_layers,
-            dropout=model_config.classifier_dropout,
-            activation="elu",
-        )
+        # Hardcoded to the tied head for now: the binary logit is an affine map of the
+        # Davidson strength λ, detached so the classification loss trains only
+        # `scale`/`bias` and the encoder stays shaped by the ranking objective alone.
+        # NOTE: `positive_is_greater` defaults to True, which is the wrong sign for the
+        # LT datasets (DB_MALARIA, DB_HEPG2) — `scale` has to learn through zero there.
+        classifier = TiedClassifier(detach=True)
 
         X_d_transform = (
             ScaleTransform.from_standard_scaler(X_d_scaler)

@@ -97,12 +97,22 @@ def classifier_probs(
 ) -> "np.typing.NDArray[np.float64]":
     """Binary probabilities from the classification head, one per molecule.
 
-    A direct ``sigmoid(classifier(Z))`` — no train reference set and no
+    A direct ``sigmoid`` of the head output — no train reference set and no
     ``DSThreshold`` needed, since ``bin_y`` already encodes the positive-class
     direction. ``scale_X_d`` follows the same convention as :func:`embed_all`.
     """
-    embeds = embed_all(mol_dataset, model, scale_X_d)
-    logits = model.classifier(embeds.to(model.device))
+    # Imported lazily for the same reason as in `embed_all`: model.py -> data.py ->
+    # utils.py, so a module-level import of model.py here would be circular.
+    from models.deltaprop.model import TiedClassifier
+
+    embeds = embed_all(mol_dataset, model, scale_X_d).to(model.device)
+    # The tied head reads the ranking strength λ; the independent head reads Z.
+    head_input = (
+        model.interaction.strength(embeds)
+        if isinstance(model.classifier, TiedClassifier)
+        else embeds
+    )
+    logits = model.classifier(head_input)
     return logits.sigmoid().cpu().numpy()
 
 

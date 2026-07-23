@@ -101,6 +101,10 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
         correction = torch.logaddexp(a, b)             # log(1 + ν·exp(−δ/2))
         return delta + correction
 
+    def strength(self, Z: Tensor) -> Tensor:
+        """Per-molecule Davidson log-strength ``λ``, shape ``(N,)``."""
+        return self.projector(Z).view(-1)
+
     def forward(self, head_emb: Tensor, tail_emb: Tensor):
         if len(head_emb.shape) == 3:
             B, _, D = head_emb.shape
@@ -182,6 +186,43 @@ class Classifier(nn.Module, HyperparametersMixin):
         return self.loss_fn(logits, labels)
 
 
+class TiedClassifier(nn.Module, HyperparametersMixin):
+    """Binary head tied to the Davidson ranking score.
+
+    The logit is an affine map of the interaction strength ``λ``, so the decision
+    boundary is by construction a level set of the ranking score rather than an
+    independently learned surface in ``Z``.
+
+    ``scale`` is signed: ``λ`` increases with ``cont_target``, but ``LT`` datasets put
+    the positive class *below* the dataset threshold, so the map has to flip. ``bias``
+    pins the shift gauge the pairwise loss leaves free (it sees only ``λ_i − λ_j``).
+
+    With ``detach=True`` this is a pure probe: the classification loss reaches
+    ``scale``/``bias`` and nothing else, leaving the encoder and the projector shaped
+    by the ranking objective alone.
+    """
+
+    def __init__(self, positive_is_greater: bool = True, detach: bool = True) -> None:
+        super().__init__()
+        # mirror Encoder/Interaction: keep `cls` in hparams so the head can be
+        # reconstructed from a checkpoint.
+        self.save_hyperparameters()
+        self.hparams["cls"] = self.__class__
+
+        self.scale = nn.Parameter(torch.tensor(1.0 if positive_is_greater else -1.0))
+        self.bias = nn.Parameter(torch.zeros(()))
+        self.detach_lam = detach
+        self.loss_fn = nn.BCEWithLogitsLoss()
+
+    def forward(self, lam: Tensor) -> Tensor:
+        """Binary logits ``(N,)`` from ranking strengths ``lam`` of shape ``(N,)``."""
+        lam = lam.detach() if self.detach_lam else lam
+        return self.scale * lam.view(-1) + self.bias
+
+    def classification_loss(self, lam: Tensor, bin_target_anchor: Tensor) -> Tensor:
+        return self.loss_fn(self(lam), bin_target_anchor.view(-1).float())
+
+
 class DeltaProp(pl.LightningModule):
     def __init__(
         self,
@@ -189,7 +230,7 @@ class DeltaProp(pl.LightningModule):
         agg: Aggregation,
         encoder: Encoder,
         interaction: Interaction,
-        classifier: Classifier,
+        classifier: Classifier | TiedClassifier,
         batch_norm: bool = False,
         ranking_loss_weight: float = 1.0,
         warmup_epochs: int = 2,
@@ -286,9 +327,15 @@ class DeltaProp(pl.LightningModule):
             Z_anchor, Z_candidates, reg_target_anchor, reg_target_candidates, B, C
         )
 
-        # Classification head: binary classification of anchors only, against bin_y.
+        # Classification head: anchors only, against bin_y. The tied head reads the
+        # ranking strength λ; the independent head reads the embedding directly.
+        head_input = (
+            self.interaction.strength(Z_anchor)
+            if isinstance(self.classifier, TiedClassifier)
+            else Z_anchor
+        )
         classification_loss = self.classifier.classification_loss(
-            Z_anchor, bin_target_anchor # type: ignore
+            head_input, bin_target_anchor # type: ignore
         )
 
         loss = classification_loss + ranking_loss * self.ranking_loss_weight
