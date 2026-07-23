@@ -18,13 +18,13 @@ WANDB_PROJECT = "evaluate_all_v6"
 DATASETS = [
     "SINGLE_TARGET_TBA",
     "DUAL_TARGET_TBA",
-    "GSK_HEPG2",
+    #"GSK_HEPG2",
     "PK",
     "DB_MALARIA",
-    "DB_HEPG2",
+    #"DB_HEPG2",
 ]
-MODELS = ["chemprop", "deltaprop", "xgboost"]
-SPLITS = ["RANDOM", "SCAFFOLD"]
+MODELS = ["deltaprop"]
+SPLITS = ["SCAFFOLD"]
 
 
 def build_command(model: str, dataset: str, split: str, use_feats: bool) -> str:
@@ -59,6 +59,7 @@ def build_command(model: str, dataset: str, split: str, use_feats: bool) -> str:
 
 
 def feats_options(model: str) -> list[bool]:
+    return [False]
     # xgboost always needs descriptors; the GPU models are swept both ways.
     if model == "xgboost":
         return [True]
