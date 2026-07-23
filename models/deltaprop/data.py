@@ -161,6 +161,13 @@ class DeltaPairDataset(Dataset):
         self.frac_hard = frac_hard
         self.discordancy_degree = discordancy_degree
 
+        # Per-class candidate pools, so the random draw can be class-balanced.
+        # Both are sorted and unique, as `np.setdiff1d(..., assume_unique=True)`
+        # requires.
+        is_pos = np.asarray(candidate_dataset.bin_Y).ravel() == 1
+        self.pos_cand_idxs = np.flatnonzero(is_pos)
+        self.neg_cand_idxs = np.flatnonzero(~is_pos)
+
     def __len__(self):
         return len(self.anchor_dataset)
 
@@ -170,28 +177,32 @@ class DeltaPairDataset(Dataset):
 
         return top_k_discordant(self.discordancy_degree, idx, n)
 
-    def get_random_candidates(self, n_random: int, exclude: np.ndarray):
-        # Draw uniformly from all candidates, skipping indices already chosen as
-        # hard negatives so the same molecule can't appear twice for one anchor.
-        available = np.setdiff1d(
-            np.arange(len(self.candidate_dataset)), exclude, assume_unique=True
+    def get_random_cand_idxs(self, n_random: int, exclude: np.ndarray) -> list[int]:
+        pos_available = np.setdiff1d(self.pos_cand_idxs, exclude, assume_unique=True)
+        neg_available = np.setdiff1d(self.neg_cand_idxs, exclude, assume_unique=True)
+
+        n_pos = min(n_random // 2, pos_available.shape[0])
+        n_neg = min(n_random - n_pos, neg_available.shape[0])
+
+        random_idxs = np.concatenate(
+            [
+                np.random.choice(pos_available, size=n_pos, replace=False),
+                np.random.choice(neg_available, size=n_neg, replace=False),
+            ]
         )
-        n_sample = min(n_random, available.shape[0])
-        random_idxs = np.random.choice(available, size=n_sample, replace=False)
-        return [self.candidate_dataset[idx] for idx in random_idxs]
+        return random_idxs.tolist()
 
     def __getitem__(self, idx) -> DeltaPairDataPoint:
         hard_neg_idxs = self.get_hard_neg_idxs(
             idx, int(self.frac_hard * self.n_candidates)
         )
-        random_candidates = self.get_random_candidates(
+        random_idxs = self.get_random_cand_idxs(
             self.n_candidates - len(hard_neg_idxs),
             exclude=np.asarray(hard_neg_idxs, dtype=int),
         )
-        hard_neg_candidates = [self.candidate_dataset[i] for i in hard_neg_idxs]
         return DeltaPairDataPoint(
             self.anchor_dataset[idx],
-            hard_neg_candidates + random_candidates,
+            [self.candidate_dataset[i] for i in hard_neg_idxs + random_idxs],
         )
 
     @staticmethod
