@@ -169,7 +169,7 @@ class Classifier(nn.Module, HyperparametersMixin):
         self.hparams["activation"] = activation
         self.hparams["cls"] = self.__class__
 
-        self.ffn = MLP.build(input_dim, 1, hidden_dim, n_layers, dropout, activation)
+        self.ffn = MLP.build(input_dim, 1, hidden_dim, 0, dropout, activation)
         self.loss_fn = nn.BCEWithLogitsLoss()
 
     def forward(self, Z: Tensor) -> Tensor:
