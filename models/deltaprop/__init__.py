@@ -53,7 +53,7 @@ def seed_worker(worker_id):
 class DeltapropRef(RefModel[DeltapropConfig]):
     def __init__(self, model: DeltaProp) -> None:
         self.model = model
-        # Fitted boundary threshold λ_t
+        # Boundary-compound strength λ_τ (prevalence quantile of train λ)
         self.lambda_tau: float | None = None
 
     @staticmethod
