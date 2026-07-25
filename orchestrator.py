@@ -49,10 +49,10 @@ UNKNOWN_DATASET_ROWS = 0
 CPU_ONLY_MODELS = {"xgboost"}
 
 # CLI model token -> the tag evaluate.cli stamps on its wandb run. Note the mapping isn't
-# identity: deltaprop runs are tagged "deltaprop-v3" (see evaluate/cli.py).
+# identity: deltaprop runs are tagged "deltaprop-v4" (see evaluate/cli.py).
 MODEL_WANDB_TAG = {
     "chemprop": "chemprop",
-    "deltaprop": "deltaprop-v3",
+    "deltaprop": "deltaprop-v4",
     "xgboost": "xgboost",
 }
 
