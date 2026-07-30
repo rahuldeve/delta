@@ -24,7 +24,7 @@ def candidate_size(
     deltaprop_cf: DeltapropConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
     dataset: SupportedDatasets = SupportedDatasets.DB_MALARIA,
-    candidate_sizes: tuple[int, ...] = tuple(range(8, 52, 8)),
+    candidate_sizes: tuple[int, ...] = (8, 16, 32, 64),
     seeds: tuple[int, ...] = (42, 53, 64, 75, 86),
     run_name: str | None = None,
 ):
