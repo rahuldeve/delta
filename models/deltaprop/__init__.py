@@ -24,7 +24,11 @@ from models.abc import PreparedDatasetSplit, RefModel
 from models.config import DeltapropConfig
 from models.deltaprop.data import RandomPairDataModule
 from models.deltaprop.model import DeltaProp, Encoder, Interaction
-from models.deltaprop.utils import class_mean_probs, embed_all
+from models.deltaprop.utils import (
+    davidson_threshold_probs,
+    embed_all,
+    locate_lambda_tau,
+)
 
 
 def get_molecule_datapoint(row):
@@ -49,6 +53,8 @@ def seed_worker(worker_id):
 class DeltapropRef(RefModel[DeltapropConfig]):
     def __init__(self, model: DeltaProp) -> None:
         self.model = model
+        # Boundary-compound strength λ_τ (prevalence quantile of train λ)
+        self.lambda_tau: float | None = None
 
     @staticmethod
     def prepare_splits(*, train_df, val_df, test_df):
@@ -187,9 +193,9 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         self,
         *,
         train_split: MoleculeDataset,
-        train_labels: np.typing.NDArray[np.bool],
+        train_labels: pd.Series,
         val_split: MoleculeDataset,
-        val_labels: np.typing.NDArray[np.bool],
+        val_labels: pd.Series,
         df_classification_threshold: DSThreshold,
         train_config: TrainConfig,
         **kwargs,
@@ -200,11 +206,16 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         train_embeds = embed_all(train_split, model)
         val_embeds = embed_all(val_split, model)
 
-        pred_probs = class_mean_probs(
+        self.lambda_tau = locate_lambda_tau(
             model,
             train_embeds,
+            train_labels.to_numpy(),
+            df_classification_threshold,
+        )
+        pred_probs = davidson_threshold_probs(
+            model,
             val_embeds,
-            train_labels,
+            self.lambda_tau,
             df_classification_threshold,
         )
 
@@ -223,27 +234,25 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         *,
         binary_classification_threshold: float,
         df_classification_threshold: DSThreshold,
-        train_split: MoleculeDataset,
-        train_labels: np.typing.NDArray[np.bool],
         test_split: MoleculeDataset,
         split_X_d_prescaled: bool = False,
         **kwargs,
     ):
+        assert self.lambda_tau is not None, (
+            "lambda_tau is unset; "
+            "tune_binary_classification_threshold must run before predict_func."
+        )
         model = self.model
         model.eval()
 
-        # train is the reference set and is always pre-scaled in-place
-        # (scale_X_d=False). The scored split (`test_split`) is raw for the test
-        # set but pre-scaled for the val set; `split_X_d_prescaled` avoids
-        # double-scaling its features.
-        train_embeds = embed_all(train_split, model)
+        # The scored split (`test_split`) is raw for the test set but pre-scaled for
+        # the val set; `split_X_d_prescaled` avoids double-scaling its features.
         test_embeds = embed_all(test_split, model, scale_X_d=not split_X_d_prescaled)
 
-        pred_probs = class_mean_probs(
+        pred_probs = davidson_threshold_probs(
             model,
-            train_embeds,
             test_embeds,
-            train_labels,
+            self.lambda_tau,
             df_classification_threshold,
         )
 

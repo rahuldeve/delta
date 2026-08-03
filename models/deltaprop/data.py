@@ -44,7 +44,7 @@ def top_k_discordant(
     i: int,
     k: int,
     stochastic: bool = True,
-    temperature: float = 2.0,
+    temperature: float = 1.0,
 ) -> list[int]:
     """
     Return up to k indices most discordant with index i.
@@ -133,16 +133,14 @@ class RandomPairDataset(Dataset):
     def __len__(self):
         return len(self.anchor_dataset)
 
-    def get_hard_neg_candidates(self, idx: int, n: int):
+    def get_hard_neg_idxs(self, idx: int, n: int) -> list[int]:
         if self.discordancy_degree is None:
             return []
 
         if n == 0:
             return []
 
-        selected_idxs = top_k_discordant(self.discordancy_degree, idx, n)
-
-        return [self.candidate_dataset[idx] for idx in selected_idxs]
+        return top_k_discordant(self.discordancy_degree, idx, n)
 
     def _class_index_pools(self) -> tuple[np.ndarray, np.ndarray]:
         """Indices of candidate molecules in the positive / negative class.
@@ -162,19 +160,25 @@ class RandomPairDataset(Dataset):
         neg_class_idxs = np.argwhere(~pos_class_mask).squeeze()
         return pos_class_idxs, neg_class_idxs
 
-    def get_random_candidates(self, n_random: int):
+    def get_random_idxs(
+        self, n_random: int, exclude: set[int] | None = None
+    ) -> list[int]:
         pos_class_idxs = self.pos_class_idxs
         neg_class_idxs = self.neg_class_idxs
 
-        pos_class_sample_count = min(int(0.8 * n_random), pos_class_idxs.shape[0])
+        # Drop any indices already chosen as hard negatives so they are not drawn
+        # again here, which would put duplicate candidates in the same anchor's set.
+        if exclude:
+            exclude_arr = np.fromiter(exclude, dtype=pos_class_idxs.dtype)
+            pos_class_idxs = pos_class_idxs[~np.isin(pos_class_idxs, exclude_arr)]
+            neg_class_idxs = neg_class_idxs[~np.isin(neg_class_idxs, exclude_arr)]
+
+        pos_class_sample_count = min(int(0.5 * n_random), pos_class_idxs.shape[0])
         random_pos_class_idxs = np.random.choice(
             pos_class_idxs,
             size=(pos_class_sample_count,),
             replace=False,
         )
-        random_pos_candidates = [
-            self.candidate_dataset[idx] for idx in random_pos_class_idxs
-        ]
 
         neg_class_sample_count = min(
             n_random - pos_class_sample_count, neg_class_idxs.shape[0]
@@ -184,24 +188,23 @@ class RandomPairDataset(Dataset):
             size=(neg_class_sample_count,),
             replace=False,
         )
-        random_neg_candidates = [
-            self.candidate_dataset[idx] for idx in random_neg_class_idxs
-        ]
 
-        return random_pos_candidates + random_neg_candidates
+        return [int(idx) for idx in chain(random_pos_class_idxs, random_neg_class_idxs)]
 
     def __getitem__(self, idx) -> RandomPairDataPoint:
-        hard_neg_candidates = self.get_hard_neg_candidates(
+        hard_neg_idxs = self.get_hard_neg_idxs(
             idx, int(self.frac_hard * self.n_candidates)
         )
-        random_candidates = self.get_random_candidates(
-            self.n_candidates - len(hard_neg_candidates)
+        random_idxs = self.get_random_idxs(
+            self.n_candidates - len(hard_neg_idxs),
+            exclude=set(hard_neg_idxs),
         )
-        # random_candidates = self.get_random_candidates(self.n_candidates)
+        candidates = [
+            self.candidate_dataset[j] for j in chain(hard_neg_idxs, random_idxs)
+        ]
         return RandomPairDataPoint(
             self.anchor_dataset[idx],
-            hard_neg_candidates + random_candidates,
-            # random_candidates
+            candidates,
         )
 
     @staticmethod

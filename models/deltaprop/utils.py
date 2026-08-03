@@ -7,6 +7,18 @@ from data import GT, DSThreshold
 
 
 @torch.no_grad()
+def project_lambdas(embeds: torch.Tensor, model) -> torch.Tensor:
+    """Map embeddings to their scalar Davidson strengths λ = projector(embed).
+
+    Returns a 1-D tensor on ``model.device``. ``squeeze(-1)`` (not a bare
+    ``squeeze``) so a single-row input stays shape ``(1,)`` instead of collapsing
+    to a scalar.
+    """
+    lam = model.interaction.projector(embeds.to(model.device)).squeeze(-1)
+    return lam
+
+
+@torch.no_grad()
 def embed_all(mol_dataset: MoleculeDataset, model, scale_X_d: bool = False):
     model.eval()
     if not scale_X_d:
@@ -30,55 +42,58 @@ def embed_all(mol_dataset: MoleculeDataset, model, scale_X_d: bool = False):
     return all_embeds
 
 
-@torch.no_grad()
-def class_mean_probs(
+def locate_lambda_tau(
     model,
     train_embeds: torch.Tensor,
-    query_embeds: torch.Tensor,
     train_labels: "np.typing.NDArray[np.bool]",
     df_classification_threshold: DSThreshold,
-    chunk_size: int = 1024,
-) -> "np.typing.NDArray[np.float64]":
-    """Per-query class-averaged interaction probability against the train set.
+) -> float:
+    """Locate the boundary compound's strength λ_τ by the prevalence quantile.
 
-    Streams the query molecules in chunks so the GPU only ever holds a
-    ``(chunk_size, N_train)`` interaction tensor instead of the full
-    ``(N_query, N_train)`` matrix. Numerically equivalent to the single-shot path.
+    λ_τ is the strength the model would assign to a compound sitting exactly at the
+    label cutoff τ. If a fraction ``π₊`` of train compounds are active and the model
+    ranks faithfully, τ sits at the ``1 − π₊`` quantile of the train strengths for a
+    GT task (top π₊ active) and the ``π₊`` quantile for LT (bottom π₊ active). ``π₊``
+    comes from ``train_labels`` — the large split — so the location is stable even
+    when positives are rare. Zero-parameter: only the class balance, no fit, so it
+    can't suffer the flat-likelihood / separation degeneracy an MLE of the location
+    would. See :func:`davidson_threshold_probs`.
     """
-    device = model.device
+    lam_train = project_lambdas(train_embeds, model).float()
+    y = np.asarray(train_labels).astype(bool)
+    pi_pos = float(y.mean()) if y.size else 0.5
+    pi_pos = min(max(pi_pos, 1e-6), 1.0 - 1e-6)  # guard all-one/all-zero folds
+    q = 1.0 - pi_pos if isinstance(df_classification_threshold, GT) else pi_pos
+    return float(torch.quantile(lam_train, q).item())
+
+
+@torch.no_grad()
+def davidson_threshold_probs(
+    model,
+    query_embeds: torch.Tensor,
+    lam_tau: float,
+    df_classification_threshold: DSThreshold,
+) -> "np.typing.NDArray[np.float64]":
+    """P(query active) as a single tie-centered Davidson comparison against λ_τ.
+
+    ``P(active) = sigmoid(g(λ_q − λ_τ))`` for GT (active ≡ property ≥ τ ≡ the query
+    beats the boundary), and the head/tail flip ``g(λ_τ − λ_q)`` for LT. ``g(δ) =
+    δ + log(1 + ν·e^{−δ/2})`` is the Davidson logit; subtracting the tie baseline
+    ``g(0) = log(1 + ν) > 0`` (a fixed offset, positive because ``>=`` counts a tie
+    as a win) makes the score exactly 0 — hence ``P = 0.5`` — at ``λ_q == λ_τ``, so
+    λ_τ *is* the 0.5 decision boundary by construction. Monotone in λ_q, so ROC-AUC /
+    AP match the raw strength ordering; O(N_query), no reference set.
+    """
     interaction = model.interaction
+    lam_q = project_lambdas(query_embeds, model)  # (N_query,)
+    lam_tau_t = torch.as_tensor(lam_tau, dtype=lam_q.dtype, device=lam_q.device)
 
-    theta_train = interaction.projector(train_embeds.to(device)).squeeze()  # (N_train,)
-    theta_query = interaction.projector(query_embeds.to(device)).squeeze()  # (N_query,)
-
-    pos_mask = torch.as_tensor(train_labels, dtype=torch.bool, device=device)
-    neg_mask = ~pos_mask
-    has_pos = bool(pos_mask.any())
-    has_neg = bool(neg_mask.any())
     is_gt = isinstance(df_classification_threshold, GT)
-
-    results = []
-    for start in range(0, theta_query.shape[0], chunk_size):
-        theta_q = theta_query[start : start + chunk_size]  # (chunk,)
-
-        head = theta_q[:, None] if is_gt else theta_train[None, :]
-        tail = theta_train[None, :] if is_gt else theta_q[:, None]
-        probs = interaction._davidson_logit(
-            head, tail, interaction.log_nu
-        ).sigmoid()  # (chunk, N_train)
-
-        if has_pos and has_neg:
-            reduced = (
-                probs[:, pos_mask].mean(dim=-1) + probs[:, neg_mask].mean(dim=-1)
-            ) / 2
-        elif has_pos:
-            reduced = probs[:, pos_mask].mean(dim=-1)
-        else:
-            reduced = probs[:, neg_mask].mean(dim=-1)
-
-        results.append(reduced.cpu().numpy())
-
-    return np.concatenate(results)
+    head = lam_q if is_gt else lam_tau_t
+    tail = lam_tau_t if is_gt else lam_q
+    g = interaction._davidson_logit(head, tail, interaction.log_nu)
+    g0 = torch.logaddexp(torch.zeros_like(interaction.log_nu), interaction.log_nu)
+    return (g - g0).sigmoid().cpu().numpy()
 
 
 @torch.no_grad()
