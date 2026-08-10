@@ -1,3 +1,4 @@
+from itertools import islice
 from typing import Type
 
 import numpy as np
@@ -49,22 +50,37 @@ def get_random_splitters(random_state, n_outer):
     return outer_splitter, inner_spliter
 
 
+def get_splitters(split_type: SplitType, random_state: int, n_outer: int):
+    """Return `(outer_splitter, inner_splitter, group_col_getter)` for a split type.
+
+    The outer splitter carves off val+test (ratio 1/n_outer); the inner one halves
+    that into val and test. `group_col_getter` picks the clustering column that keeps
+    groups disjoint across the split — RANDOM has none, so it yields `None` and the
+    stratified splitters ignore the `groups` argument.
+    """
+    if split_type == SplitType.RANDOM:
+        outer_splitter, inner_spliter = get_random_splitters(random_state, n_outer)
+        group_col_getter = lambda _df: None  # noqa: E731
+    elif split_type == SplitType.SCAFFOLD:
+        outer_splitter, inner_spliter = get_group_splitters(random_state, n_outer)
+        group_col_getter = lambda _df: _df["scaffold_cluster"]  # noqa: E731
+    elif split_type == SplitType.BUTINA:
+        outer_splitter, inner_spliter = get_group_splitters(random_state, n_outer)
+        group_col_getter = lambda _df: _df["butina_cluster"]  # noqa: E731
+    else:
+        raise ValueError(split_type)
+
+    return outer_splitter, inner_spliter, group_col_getter
+
+
 def generate_repeated_5xn_splits(df, n: int, split_type: SplitType, random_state: int):
     rng = np.random.RandomState(random_state)
     for outer_idx in range(5):
         randint = rng.randint(low=0, high=32767)
 
-        if split_type == SplitType.RANDOM:
-            outer_splitter, inner_spliter = get_random_splitters(randint, n_outer=n)
-            group_col_getter = lambda _df: None  # noqa: E731
-        elif split_type == SplitType.SCAFFOLD:
-            outer_splitter, inner_spliter = get_group_splitters(randint, n_outer=n)
-            group_col_getter = lambda _df: _df["scaffold_cluster"]  # noqa: E731
-        elif split_type == SplitType.BUTINA:
-            outer_splitter, inner_spliter = get_group_splitters(randint, n_outer=n)
-            group_col_getter = lambda _df: _df["butina_cluster"]  # noqa: E731
-        else:
-            raise ValueError(split_type)
+        outer_splitter, inner_spliter, group_col_getter = get_splitters(
+            split_type, randint, n_outer=n
+        )
 
         for inner_idx, (train_idxs, val_test_idxs) in enumerate(
             outer_splitter.split(df, y=df["bin_target"], groups=group_col_getter(df))
@@ -84,6 +100,44 @@ def generate_repeated_5xn_splits(df, n: int, split_type: SplitType, random_state
             test_df = val_test_df.loc[test_idxs].reset_index(drop=True)
 
             yield (outer_idx, inner_idx), (train_df, val_df, test_df)
+
+
+def single_split(df, n_splits, seed, split_type, fold: int = 0):
+    """Build one train/val/test split (no cross-validation) for the given split type.
+
+    Mirrors one iteration of `generate_repeated_5xn_splits`: the outer splitter yields
+    train vs val+test (ratio 1/n_splits), then the inner 2-fold splitter halves
+    val+test into val and test. `fold` selects which of the `n_splits` outer folds to
+    take; `fold=0` is the first one.
+    """
+    if not 0 <= fold < n_splits:
+        raise ValueError(f"fold must be in [0, {n_splits}), got {fold}")
+
+    outer_splitter, inner_splitter, groups_of = get_splitters(
+        split_type, seed, n_outer=n_splits
+    )
+
+    train_idxs, val_test_idxs = next(
+        islice(
+            outer_splitter.split(df, y=df["bin_target"], groups=groups_of(df)),
+            fold,
+            None,
+        )
+    )
+    train_df = df.loc[train_idxs].reset_index(drop=True)
+    val_test_df = df.loc[val_test_idxs].reset_index(drop=True)
+
+    val_idxs, test_idxs = next(
+        inner_splitter.split(
+            val_test_df,
+            y=val_test_df["bin_target"],
+            groups=groups_of(val_test_df),
+        )
+    )
+    val_df = val_test_df.loc[val_idxs].reset_index(drop=True)
+    test_df = val_test_df.loc[test_idxs].reset_index(drop=True)
+
+    return train_df, val_df, test_df
 
 
 def calc_metrics(pred_probs, preds, labels):
@@ -107,7 +161,16 @@ def train_and_evaluate_split(
     model_class: Type[RefModel],
     model_config: ModelConfig,
     train_config: TrainConfig,
+    trainer_logger=None,
+    extra_callbacks=None,
 ):
+    """Train one split and score it on val and test.
+
+    `trainer_logger` and `extra_callbacks` are handed straight to `train_func`; the
+    Lightning models attach them to their `L.Trainer`. Both default to None, which is
+    what the cross-validation path passes — no logger, no extra callbacks. `train.cli`
+    uses them to stream losses and gradients to wandb for a single split.
+    """
     train_split, val_split, test_split, extras = model_class.prepare_splits(
         train_df=train_df, val_df=val_df, test_df=test_df
     )
@@ -124,6 +187,8 @@ def train_and_evaluate_split(
         train_config=train_config,
         model_config=model_config,
         df_classification_threshold=df_classification_threshold,
+        trainer_logger=trainer_logger,
+        extra_callbacks=extra_callbacks,
     )
 
     clf_th = model.tune_binary_classification_threshold(

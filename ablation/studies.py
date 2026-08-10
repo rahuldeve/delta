@@ -9,6 +9,7 @@ from config import SplitType, TrainConfig, WandbConfig, WandbDisabled
 from data import SupportedDatasets
 from evaluate.cli import prepare_dataset
 from models.config import ChempropConfig, DeltapropConfig
+from train.core import single_split
 
 from ablation.common import (
     evaluate_and_log,

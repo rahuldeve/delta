@@ -59,7 +59,7 @@ def chemprop(
     model_cf: ChempropConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
 ):
-    from evaluate.train import train_and_evaluate
+    from train.core import train_and_evaluate
     from models.chemprop_bl import ChempropRef
 
     if isinstance(wandb_cf, WandbEnabled):
@@ -114,7 +114,7 @@ def deltaprop(
     model_cf: DeltapropConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
 ):
-    from evaluate.train import train_and_evaluate
+    from train.core import train_and_evaluate
     from models.deltaprop import DeltapropRef
 
     if isinstance(wandb_cf, WandbEnabled):
@@ -168,7 +168,7 @@ def xgboost(
     model_cf: XGBoostConfig,
     wandb_cf: WandbConfig = WandbDisabled(),
 ):
-    from evaluate.train import train_and_evaluate
+    from train.core import train_and_evaluate
     from models.xgboost_bl import XGBoostRef
 
     if isinstance(wandb_cf, WandbEnabled):
