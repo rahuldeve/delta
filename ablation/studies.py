@@ -2,12 +2,13 @@
 
 Each study logs to the shared `ABLATION_PROJECT` wandb project as a single run with
 a stable custom name; every sweep point is a history step within that run. The
-shared split / wandb / train+log plumbing lives in `ablation.common`.
+shared wandb / train+log plumbing lives in `ablation.common`; the split helpers come
+from `train.core`.
 """
 
 from config import SplitType, TrainConfig, WandbConfig, WandbDisabled
 from data import SupportedDatasets
-from evaluate.cli import prepare_dataset
+from data.prepare import prepare_dataset
 from models.config import ChempropConfig, DeltapropConfig
 from train.core import single_split
 
@@ -15,7 +16,6 @@ from ablation.common import (
     evaluate_and_log,
     init_ablation_run,
     nested_stratified_fractions,
-    single_split,
 )
 
 
