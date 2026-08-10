@@ -41,8 +41,17 @@ class RefModel(ABC, Generic[ModelConfigType]):
         train_split: Any,
         val_split: Any,
         train_config: TrainConfig,
+        trainer_logger: Any = None,
+        extra_callbacks: list | None = None,
         **kwargs,
     ) -> Self:
+        """Train on `train_split`, returning self holding the best checkpoint.
+
+        `trainer_logger` and `extra_callbacks` are the instrumentation hooks used by
+        `train.cli`: Lightning-backed models pass them to their `L.Trainer` so losses
+        and gradients can be streamed to wandb. Both are None/empty on the
+        cross-validation path, and models with no such notion may ignore them.
+        """
         pass
 
     @abstractmethod

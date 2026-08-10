@@ -2,9 +2,9 @@
 
 All ablation studies log to a single wandb project (pass `--wandb-cf.project-name
 ablations`), with one named run per study and every sweep point logged as a history
-step in that run. This module holds the split helpers, the wandb init/artifact
-plumbing, and the generic per-sweep-point train+log routine that the studies in
-`studies.py` reuse.
+step in that run. This module holds the wandb init/artifact plumbing and the generic
+per-sweep-point train+log routine that the studies in `studies.py` reuse; the split
+helpers they use live in `train.core`.
 """
 
 import pickle
@@ -13,8 +13,7 @@ from datetime import datetime
 
 import numpy as np
 
-from config import SplitType, TrainConfig, WandbConfig, WandbEnabled
-from evaluate.train import get_group_splitters, get_random_splitters
+from config import TrainConfig, WandbConfig, WandbEnabled
 
 
 def nested_stratified_fractions(df, fractions, seed):
@@ -43,45 +42,6 @@ def nested_stratified_fractions(df, fractions, seed):
         sub_idxs = np.concatenate(selected)
         sub_df = df.loc[sub_idxs].reset_index(drop=True)
         yield fraction, sub_df
-
-
-def single_split(df, n_splits, seed, split_type):
-    """Build one train/val/test split (no cross-validation) for the given split type.
-
-    Mirrors the first iteration of `generate_repeated_5xn_splits`: the outer
-    splitter yields train vs val+test (ratio 1/n_splits), then the inner 2-fold
-    splitter halves val+test into val and test. For SCAFFOLD/BUTINA the grouping
-    column keeps clusters disjoint across the split; RANDOM ignores groups.
-    """
-    if split_type == SplitType.RANDOM:
-        outer_splitter, inner_splitter = get_random_splitters(seed, n_outer=n_splits)
-        groups_of = lambda _df: None  # noqa: E731
-    elif split_type == SplitType.SCAFFOLD:
-        outer_splitter, inner_splitter = get_group_splitters(seed, n_outer=n_splits)
-        groups_of = lambda _df: _df["scaffold_cluster"]  # noqa: E731
-    elif split_type == SplitType.BUTINA:
-        outer_splitter, inner_splitter = get_group_splitters(seed, n_outer=n_splits)
-        groups_of = lambda _df: _df["butina_cluster"]  # noqa: E731
-    else:
-        raise ValueError(split_type)
-
-    train_idxs, val_test_idxs = next(
-        outer_splitter.split(df, y=df["bin_target"], groups=groups_of(df))
-    )
-    train_df = df.loc[train_idxs].reset_index(drop=True)
-    val_test_df = df.loc[val_test_idxs].reset_index(drop=True)
-
-    val_idxs, test_idxs = next(
-        inner_splitter.split(
-            val_test_df,
-            y=val_test_df["bin_target"],
-            groups=groups_of(val_test_df),
-        )
-    )
-    val_df = val_test_df.loc[val_idxs].reset_index(drop=True)
-    test_df = val_test_df.loc[test_idxs].reset_index(drop=True)
-
-    return train_df, val_df, test_df
 
 
 def init_ablation_run(wandb_cf: WandbConfig, run_name: str, extra_tags):
@@ -156,7 +116,7 @@ def evaluate_and_log(
     When wandb is enabled the row is logged as a history step and the predictions +
     split are attached as an artifact keyed by `label`.
     """
-    from evaluate.train import train_and_evaluate_split
+    from train.core import train_and_evaluate_split
 
     train_df, val_df, test_df = split
     metrics_dict, predictions = train_and_evaluate_split(

@@ -144,6 +144,8 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         train_config: TrainConfig,
         df_classification_threshold: DSThreshold,
         model_config: DeltapropConfig,
+        trainer_logger=None,
+        extra_callbacks: list | None = None,
         **kwargs,
     ) -> Self:
         datamodule = RandomPairDataModule(
@@ -158,7 +160,7 @@ class DeltapropRef(RefModel[DeltapropConfig]):
 
         with tempfile.TemporaryDirectory() as ckpt_dir:
             trainer = L.Trainer(
-                logger=None,
+                logger=trainer_logger,
                 enable_checkpointing=True,
                 enable_progress_bar=True,
                 accelerator="auto",
@@ -179,6 +181,7 @@ class DeltapropRef(RefModel[DeltapropConfig]):
                         mode="min",
                         save_top_k=1,
                     ),
+                    *(extra_callbacks or []),
                 ],
             )
 

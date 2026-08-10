@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
+from typing import Literal
 
 
 class SplitType(StrEnum):
@@ -20,6 +21,17 @@ class TrainConfig:
 
 
 @dataclass
+class LogConfig:
+    """Instrumentation depth for `train.cli`. Ignored when wandb is disabled."""
+
+    # Gradient L2 norms, per parameter tensor plus a total. 0 disables them.
+    grad_norm_every_n_steps: int = 1
+    # Parameter/gradient histograms via wandb.watch. 0 disables them.
+    watch_log_freq: int = 50
+    watch_log: Literal["gradients", "parameters", "all"] = "all"
+
+
+@dataclass
 class WandbDisabled:
     pass
 
@@ -28,7 +40,7 @@ class WandbDisabled:
 class WandbEnabled:
     project_name: str
     tags: list[str] = field(default_factory=list)
-    model_name_suffix: str|None = None
+    model_name_suffix: str | None = None
 
 
 WandbConfig = WandbDisabled | WandbEnabled

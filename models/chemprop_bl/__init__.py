@@ -157,6 +157,8 @@ class ChempropRef(RefModel[ChempropConfig]):
         train_split: MoleculeDataset,
         val_split: MoleculeDataset,
         train_config: TrainConfig,
+        trainer_logger=None,
+        extra_callbacks: list | None = None,
         **kwargs,
     ) -> Self:
         train_loader = build_dataloader(
@@ -173,7 +175,7 @@ class ChempropRef(RefModel[ChempropConfig]):
 
         with tempfile.TemporaryDirectory() as ckpt_dir:
             trainer = L.Trainer(
-                logger=None,
+                logger=trainer_logger,
                 enable_checkpointing=True,
                 enable_progress_bar=True,
                 accelerator="auto",
@@ -193,6 +195,7 @@ class ChempropRef(RefModel[ChempropConfig]):
                         mode="min",
                         save_top_k=1,
                     ),
+                    *(extra_callbacks or []),
                 ],
             )
 
