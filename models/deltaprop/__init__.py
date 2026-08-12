@@ -148,6 +148,10 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         extra_callbacks: list | None = None,
         **kwargs,
     ) -> Self:
+        # Needed by on_validation_epoch_end for the boundary-weighted and binary
+        # signals. Not for tau, which is threshold-free.
+        self.model.df_classification_threshold = df_classification_threshold
+
         datamodule = RandomPairDataModule(
             train_mol_ds=train_split,
             val_mol_ds=val_split,

@@ -4,6 +4,7 @@ import math
 import traceback
 from typing import Self
 
+import numpy as np
 import torch
 from chemprop.conf import DEFAULT_HIDDEN_DIM
 from chemprop.data import BatchMolGraph, TrainingBatch
@@ -14,11 +15,30 @@ from chemprop.schedulers import build_NoamLike_LRSched
 from lightning import pytorch as pl
 from lightning.pytorch.core.mixins.hparams_mixin import HyperparametersMixin
 from scipy.stats import kendalltau
+from sklearn.metrics import average_precision_score, roc_auc_score
 from torch import Tensor, nn, optim
 
+from data import LT
 from models.deltaprop.data import RandomPairTrainBatch
 
 logger = logging.getLogger(__name__)
+
+
+def boundary_weighted_tau(lam: "np.ndarray", y: "np.ndarray", w: "np.ndarray") -> float:
+    """Concordance between λ and y, with each pair weighted by ``w_i · w_j``.
+
+    Gamma-style normalisation: pairs tied in y (there are many — the target is
+    quantised to 1% steps) drop out of both numerator and denominator rather than
+    being corrected for as tau-b does. So the *level* is not comparable to
+    ``val_kendall_tau``; compare trajectories and argmax, not absolute values.
+
+    O(n²), which is ~1.7M pairs and a few ms at the 1318-molecule val size.
+    """
+    sy = np.sign(y[:, None] - y[None, :]).astype(np.float32)
+    sl = np.sign(lam[:, None] - lam[None, :]).astype(np.float32)
+    W = (w[:, None] * w[None, :]).astype(np.float32)
+    den = float((W * np.abs(sy) * np.abs(sl)).sum())
+    return float((W * sy * sl).sum() / den) if den > 0 else float("nan")
 
 
 class Encoder(nn.Module, HyperparametersMixin):
@@ -282,25 +302,58 @@ class DeltaProp(pl.LightningModule):
         self._val_targets.clear()
 
     def on_validation_epoch_end(self) -> None:
-        """Log Kendall's tau-b between λ and the continuous target on val.
+        """Log a family of val ranking signals, all derived from the same (λ, y).
 
-        Scale-free, unlike `val_loss`: BCE keeps improving as the projector inflates λ
-        even when the ordering is unchanged, whereas a rank correlation is invariant to
-        that. tau-b (not tau-a) because the target is quantised to 1% steps — 131 unique
-        values across 13k molecules — so ties are everywhere and need correcting for.
+        These are diagnostics only — `EarlyStopping`/`ModelCheckpoint` still monitor
+        `val_loss`. The point is to see, on one run, whether any of them locates a
+        sharper optimum than `val_loss` does:
 
-        No GT/LT handling: the training label is `target_anchor >= target_candidates`
-        on the *continuous* target, so λ rises with y on every dataset. The threshold
-        direction only enters at inference, in `davidson_threshold_probs`. Negating λ
-        for LT would just report −tau for a good model.
+        - ``val_kendall_tau``  tau-b over all pairs. Scale-free, unlike `val_loss`:
+          BCE keeps improving as the projector inflates λ even when the ordering is
+          unchanged. tau-b not tau-a because the target is quantised to 1% steps, so
+          ties are everywhere. No GT/LT handling — the training label is
+          `target_anchor >= target_candidates` on the *continuous* target, so λ rises
+          with y on every dataset, and negating for LT would just report −tau.
+        - ``val_tau_w0p1`` / ``val_tau_w0p2``  the same concordance, but weighting each
+          pair by ``w_i·w_j`` with ``w = exp(-|y-τ|/h)`` — how close *both* members sit
+          to the class boundary. Note this is not a path toward ROC-AUC: AUC restricts
+          to τ-*straddling* pairs, which can be far apart in y, whereas this restricts
+          to pairs clustered *at* τ, which are near-ties and intrinsically much harder.
+          Measured on a realistic model, narrowing h drives it 0.34 → 0.09 while
+          2·AUC−1 sits at 0.66. Small h also thins the sample fast (h=0.1 leaves ~158
+          effective molecules of 1318), so expect the tight variants to be jittery —
+          which is part of what this run is meant to quantify.
+        - ``val_ep_roc_auc`` / ``val_ep_ap``  the binary task, per epoch. Equal to the
+          reported final metrics because `davidson_threshold_probs` is monotone in λ,
+          so no λ_τ and no train-set pass are needed to rank.
         """
         if not self._val_lambdas:
             return
 
-        lam = torch.cat(self._val_lambdas).numpy()
-        y = torch.cat(self._val_targets).numpy()
+        lam = torch.cat(self._val_lambdas).numpy().astype(np.float64)
+        y = torch.cat(self._val_targets).numpy().astype(np.float64)
 
         self.log("val_kendall_tau", float(kendalltau(lam, y)[0]), prog_bar=True)
+
+        th = getattr(self, "df_classification_threshold", None)
+        if th is None:
+            return
+        tau_cut = float(th.th)
+
+        for h in (0.1, 0.2):
+            w = np.exp(-np.abs(y - tau_cut) / h)
+            self.log(
+                f"val_tau_w{h:.1f}".replace(".", "p"), boundary_weighted_tau(lam, y, w)
+            )
+
+        # Unlike tau, the binary task *does* need the threshold direction: for LT the
+        # actives sit at low y, hence low λ, so the ranking has to be inverted.
+        is_lt = isinstance(th, LT)
+        labels = (y <= tau_cut) if is_lt else (y >= tau_cut)
+        score = -lam if is_lt else lam
+        if 0 < labels.sum() < labels.size:
+            self.log("val_ep_roc_auc", float(roc_auc_score(labels, score)))
+            self.log("val_ep_ap", float(average_precision_score(labels, score)))
 
     def configure_optimizers(self):  # type: ignore
         opt = optim.Adam(self.parameters(), self.init_lr)
