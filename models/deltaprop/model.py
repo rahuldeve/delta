@@ -16,7 +16,6 @@ from lightning.pytorch.core.mixins.hparams_mixin import HyperparametersMixin
 from scipy.stats import kendalltau
 from torch import Tensor, nn, optim
 
-from data import LT
 from models.deltaprop.data import RandomPairTrainBatch
 
 logger = logging.getLogger(__name__)
@@ -193,10 +192,9 @@ class DeltaProp(pl.LightningModule):
 
         self.loss_fn = nn.BCEWithLogitsLoss()
 
-        # Per-epoch buffers for the validation ranking metric. Set as a plain attribute
-        # rather than a constructor arg so `_load`/`load_from_checkpoint`, which rebuild
-        # submodules from hparams, keep working untouched. `train_func` attaches
-        # `df_classification_threshold` the same way.
+        # Per-epoch buffers for the validation ranking metric. Plain attributes rather
+        # than constructor args, so `_load`/`load_from_checkpoint` — which rebuild
+        # submodules from hparams — keep working untouched.
         self._val_lambdas: list[Tensor] = []
         self._val_targets: list[Tensor] = []
 
@@ -290,18 +288,17 @@ class DeltaProp(pl.LightningModule):
         even when the ordering is unchanged, whereas a rank correlation is invariant to
         that. tau-b (not tau-a) because the target is quantised to 1% steps — 131 unique
         values across 13k molecules — so ties are everywhere and need correcting for.
+
+        No GT/LT handling: the training label is `target_anchor >= target_candidates`
+        on the *continuous* target, so λ rises with y on every dataset. The threshold
+        direction only enters at inference, in `davidson_threshold_probs`. Negating λ
+        for LT would just report −tau for a good model.
         """
         if not self._val_lambdas:
             return
 
         lam = torch.cat(self._val_lambdas).numpy()
         y = torch.cat(self._val_targets).numpy()
-
-        th = getattr(self, "df_classification_threshold", None)
-        if isinstance(th, LT):
-            # P(active) is monotone *decreasing* in λ for LT tasks, so flip to keep
-            # "higher tau = better" pointing the same way on every dataset.
-            lam = -lam
 
         self.log("val_kendall_tau", float(kendalltau(lam, y)[0]), prog_bar=True)
 
