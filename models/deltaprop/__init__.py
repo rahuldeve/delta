@@ -155,7 +155,7 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             batch_size=train_config.batch_size,
             n_candidates=model_config.candidate_size,
             frac_hard=model_config.frac_hard,
-            hard_margin=model_config.hard_margin,
+            hard_band=model_config.hard_band,
             seed=train_config.random_seed,
         )
 

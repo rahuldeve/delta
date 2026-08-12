@@ -15,21 +15,32 @@ def build_hardness_matrix(
     raw_scores: np.ndarray,
     reference_scores: np.ndarray,
     nu: float,
-    margin: float = 0.3,
+    band: float = 1.0,
 ) -> np.ndarray:
-    """Per-pair training value, high for pairs the model orders wrongly or barely right.
+    """Per-pair training value, peaking on pairs the model is undecided about.
 
-    ``margin`` sets how much of a correct-ordering lead still counts as hard. The
-    signed agreement ``m = sign(Δy)·net_model_pref`` runs from -1 (confidently
-    backwards) through 0 (undecided) to +1 (confidently right), and a pair survives
-    the ``np.maximum(row, 0)`` hinge in :func:`top_k_hardest` iff ``m < margin``. So
-    ``margin=0`` keeps only outright-discordant pairs (the original rule, reproduced
-    bit-for-bit), while ``margin>0`` also admits *near misses* — pairs the model gets
-    right but by a slim lead, which sit closest to its decision boundary and carry the
-    most signal. The ``|Δy|`` factor then weights sampling toward pairs whose ordering
-    label is unambiguous. Exact ties (``Δy == 0``) get ``m = 0`` and hardness 0 at any
-    margin, so they stay excluded — their ``a >= b`` label is true in both directions
-    and would be contradictory supervision.
+    The signed agreement ``m = sign(Δy)·net_model_pref`` runs from -1 (model orders
+    the pair confidently backwards) through 0 (undecided) to +1 (confidently right).
+    Hardness is a tent centred on ``m = 0`` and reaching zero at ``|m| = band``, so
+    sampling concentrates on pairs sitting *on* the decision boundary. ``band``
+    is the half-width: 1.0 admits everything with a linear falloff, smaller values
+    keep only the genuinely undecided.
+
+    This deliberately down-weights both extremes. Confidently-right pairs carry no
+    signal. Confidently-*wrong* pairs are the ones a pure discordancy rule chases,
+    but on a noisy quantised assay they are disproportionately mislabelled rather
+    than instructive — which is the likeliest reason ``frac_hard=0.5`` trained worst
+    of all the sweeps.
+
+    Supersedes an earlier ``|Δy|·(margin − m)`` form. That one was maximised at
+    ``m = −1``, so despite admitting near misses to the eligible set it still sent
+    ~92% of its sampling weight to outright-discordant pairs — it never actually
+    targeted the boundary it was meant to.
+
+    The ``|Δy|`` factor weights sampling toward pairs whose ordering label is
+    unambiguous. Exact ties (``Δy == 0``) get hardness 0 at any band, so they stay
+    excluded — their ``a >= b`` label is true in both directions and would be
+    contradictory supervision.
     """
     # Fail loudly if the model diverged — this is the only remaining NaN source
     # once the math below is stable, and silently swallowing it would hide it.
@@ -49,11 +60,9 @@ def build_hardness_matrix(
 
     ref_diff = reference_scores[:, None] - reference_scores[None, :]
 
-    # m in (-1, 1): how far the model agrees with the reference ordering. Note
-    # |ref_diff| * m == ref_diff * net_model_pref, so at margin=0 this is exactly
-    # the old D = -(ref_diff * net_model_pref).
+    # m in (-1, 1): how far the model agrees with the reference ordering.
     m = np.sign(ref_diff) * net_model_pref
-    D = np.abs(ref_diff) * (margin - m)
+    D = np.abs(ref_diff) * np.maximum(1.0 - np.abs(m) / band, 0.0)
     np.fill_diagonal(D, 0.0)
     return D
 
@@ -92,8 +101,9 @@ def top_k_hardest(
 
     row = D[i].copy()
     row[i] = 0.0
-    # Hinge: drop pairs the model already orders correctly by more than `margin`
-    # (they have hardness < 0). At margin=0 this is the old concordant-pair mask.
+    # build_hardness_matrix already clamps at 0, so this only guards against a
+    # caller passing an unclamped matrix. Pairs outside the band sit at exactly 0
+    # and are excluded by the `row > 0` count below.
     row = np.maximum(row, 0.0)
 
     total_hardness = row.sum()
@@ -247,7 +257,7 @@ class RandomPairDataModule(L.LightningDataModule):
         batch_size: int,
         n_candidates: int,
         frac_hard: float = 0.2,
-        hard_margin: float = 0.3,
+        hard_band: float = 1.0,
         num_workers: int = 4,
         seed: int = 42,
     ) -> None:
@@ -271,7 +281,7 @@ class RandomPairDataModule(L.LightningDataModule):
 
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.hard_margin = hard_margin
+        self.hard_band = hard_band
         self.seed = seed
 
     def train_dataloader(self):
@@ -326,7 +336,7 @@ class RandomPairDataModule(L.LightningDataModule):
     def update_hardness_mat_train(self, train_model_scores, nu: float):
         reference_scores = self.train_ds.anchor_dataset.Y.squeeze()
         self.train_ds.hardness = build_hardness_matrix(
-            train_model_scores, reference_scores, nu, self.hard_margin
+            train_model_scores, reference_scores, nu, self.hard_band
         )
 
 
