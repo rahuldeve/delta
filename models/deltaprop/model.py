@@ -13,8 +13,10 @@ from chemprop.nn.transforms import ScaleTransform
 from chemprop.schedulers import build_NoamLike_LRSched
 from lightning import pytorch as pl
 from lightning.pytorch.core.mixins.hparams_mixin import HyperparametersMixin
+from scipy.stats import kendalltau
 from torch import Tensor, nn, optim
 
+from data import LT
 from models.deltaprop.data import RandomPairTrainBatch
 
 logger = logging.getLogger(__name__)
@@ -44,14 +46,13 @@ class Encoder(nn.Module, HyperparametersMixin):
 
         self.ln = nn.LayerNorm(output_dim)
 
-    def forward(self, H: Tensor, X_d: Tensor | None, alpha: float) -> Tensor:        
+    def forward(self, H: Tensor, X_d: Tensor | None, alpha: float) -> Tensor:
         if X_d is None:
             return self.ffn(H)
         else:
             Z = torch.cat((H.detach(), alpha * X_d), dim=1)
             Z = self.ln(self.ffn(Z))
             return Z + H
-
 
     @property
     def input_dim(self):
@@ -93,12 +94,12 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
         Uses log1p for numerical stability when ν·exp(−δ/2) is small,
         and a large-negative-δ stabilisation to avoid exp overflow.
         """
-        delta = lam_i - lam_j                          # (...,)
+        delta = lam_i - lam_j  # (...,)
         # log(1 + ν·exp(−δ/2))  written stably via log-sum-exp trick:
         #   = log(exp(0) + exp(log_nu − δ/2))  — two-term LSE
         a = torch.zeros_like(delta)
         b = log_nu - 0.5 * delta
-        correction = torch.logaddexp(a, b)             # log(1 + ν·exp(−δ/2))
+        correction = torch.logaddexp(a, b)  # log(1 + ν·exp(−δ/2))
         return delta + correction
 
     def forward(self, head_emb: Tensor, tail_emb: Tensor):
@@ -113,7 +114,6 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
             lam_tail = self.projector(tail_emb)  # (B*C, 1)
             lam_tail = lam_tail.view(B, C)
 
-            
             return self._davidson_logit(lam_head, lam_tail, self.log_nu)
 
         else:
@@ -126,7 +126,6 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
             lam_head = lam_head.unsqueeze(1).expand(H, T, 1)
             lam_tail = lam_tail.unsqueeze(0).expand(H, T, 1)
 
-            
             return self._davidson_logit(lam_head, lam_tail, self.log_nu).squeeze()
 
     def interaction_loss(
@@ -194,6 +193,13 @@ class DeltaProp(pl.LightningModule):
 
         self.loss_fn = nn.BCEWithLogitsLoss()
 
+        # Per-epoch buffers for the validation ranking metric. Set as a plain attribute
+        # rather than a constructor arg so `_load`/`load_from_checkpoint`, which rebuild
+        # submodules from hparams, keep working untouched. `train_func` attaches
+        # `df_classification_threshold` the same way.
+        self._val_lambdas: list[Tensor] = []
+        self._val_targets: list[Tensor] = []
+
     # def fingerprint(
     #     self, bmg: BatchMolGraph, V_d: Tensor | None = None, X_d: Tensor | None = None
     # ) -> Tensor:
@@ -209,11 +215,7 @@ class DeltaProp(pl.LightningModule):
         H = self.agg(H_v, bmg.batch)
         H = self.bn(H)
 
-        Z = self.encoder(
-            H,
-            self.X_d_transform(X_d) if X_d is not None else None,
-            1.0
-        )
+        Z = self.encoder(H, self.X_d_transform(X_d) if X_d is not None else None, 1.0)
         return Z
 
     def forward(
@@ -235,6 +237,11 @@ class DeltaProp(pl.LightningModule):
         return dict(embeds=Z, targets=target)
 
     def get_losses(self, batch: RandomPairTrainBatch):
+        """Return `(loss, Z_anchor, target_anchor)`.
+
+        The anchor embedding and its target are handed back so validation can score
+        the ranking without a second forward pass — see `on_validation_epoch_end`.
+        """
         B, C = batch.B, batch.C
 
         bmg, V_d, X_d, target_anchor, _, _, _ = batch.anchor
@@ -247,7 +254,7 @@ class DeltaProp(pl.LightningModule):
             Z_anchor, Z_candidates, target_anchor, target_candidates, B, C
         )
 
-        return loss
+        return loss, Z_anchor, target_anchor
 
     def on_validation_model_eval(self) -> None:
         self.eval()
@@ -256,15 +263,48 @@ class DeltaProp(pl.LightningModule):
         self.X_d_transform.train()
 
     def training_step(self, batch: RandomPairTrainBatch, batch_idx):  # type: ignore
-        loss = self.get_losses(batch)
+        loss, _, _ = self.get_losses(batch)
         self.log("train_loss", loss, batch_size=batch.B, prog_bar=True, on_epoch=True)
         return loss
 
     def validation_step(self, batch: RandomPairTrainBatch, batch_idx):  # type: ignore
-        loss = self.get_losses(batch)
+        loss, Z_anchor, target_anchor = self.get_losses(batch)
         self.log("val_loss", loss, batch_size=batch.B, prog_bar=True, on_epoch=True)
+
+        # Every val molecule appears exactly once as an anchor (val_dataloader is
+        # shuffle=False and val_ds[idx] anchors on val_mol_ds[idx]), so stacking these
+        # across the epoch reconstructs λ for the whole split.
+        lam = self.interaction.projector(Z_anchor).squeeze(-1)
+        self._val_lambdas.append(lam.detach().float().cpu())
+        self._val_targets.append(target_anchor.detach().float().cpu().reshape(-1))
         return loss
-    
+
+    def on_validation_epoch_start(self) -> None:
+        self._val_lambdas.clear()
+        self._val_targets.clear()
+
+    def on_validation_epoch_end(self) -> None:
+        """Log Kendall's tau-b between λ and the continuous target on val.
+
+        Scale-free, unlike `val_loss`: BCE keeps improving as the projector inflates λ
+        even when the ordering is unchanged, whereas a rank correlation is invariant to
+        that. tau-b (not tau-a) because the target is quantised to 1% steps — 131 unique
+        values across 13k molecules — so ties are everywhere and need correcting for.
+        """
+        if not self._val_lambdas:
+            return
+
+        lam = torch.cat(self._val_lambdas).numpy()
+        y = torch.cat(self._val_targets).numpy()
+
+        th = getattr(self, "df_classification_threshold", None)
+        if isinstance(th, LT):
+            # P(active) is monotone *decreasing* in λ for LT tasks, so flip to keep
+            # "higher tau = better" pointing the same way on every dataset.
+            lam = -lam
+
+        self.log("val_kendall_tau", float(kendalltau(lam, y)[0]), prog_bar=True)
+
     def configure_optimizers(self):  # type: ignore
         opt = optim.Adam(self.parameters(), self.init_lr)
         if self.trainer.train_dataloader is None:
@@ -363,5 +403,3 @@ class DeltaProp(pl.LightningModule):
         model.load_state_dict(state_dict, strict=strict)
 
         return model
-
-

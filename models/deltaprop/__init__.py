@@ -148,6 +148,9 @@ class DeltapropRef(RefModel[DeltapropConfig]):
         extra_callbacks: list | None = None,
         **kwargs,
     ) -> Self:
+        # Orients val_kendall_tau for LT datasets, where P(active) decreases in λ.
+        self.model.df_classification_threshold = df_classification_threshold
+
         datamodule = RandomPairDataModule(
             train_mol_ds=train_split,
             val_mol_ds=val_split,
