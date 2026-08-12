@@ -216,19 +216,32 @@ class DeltaProp(pl.LightningModule):
         )
         return Z
 
+    def forward(
+        self, bmg: BatchMolGraph, V_d: Tensor | None = None, X_d: Tensor | None = None
+    ) -> Tensor:
+        """Alias for `encoding`, so the module is reachable through `__call__`.
+
+        Numerically identical to calling `encoding` directly — the point is that
+        `__call__` is what runs nn.Module forward hooks. `wandb.watch` registers its
+        parameter-histogram hook on the top-level module only, so every internal call
+        site has to go through `self(...)` or those histograms never get logged (the
+        gradient hooks sit on the parameter tensors and fire regardless).
+        """
+        return self.encoding(bmg, V_d, X_d)
+
     def embed_simple_batch(self, batch: TrainingBatch):
         bmg, V_d, X_d, target, _, _, _ = batch
-        Z = self.encoding(bmg, V_d, X_d)
+        Z = self(bmg, V_d, X_d)
         return dict(embeds=Z, targets=target)
 
     def get_losses(self, batch: RandomPairTrainBatch):
         B, C = batch.B, batch.C
 
         bmg, V_d, X_d, target_anchor, _, _, _ = batch.anchor
-        Z_anchor = self.encoding(bmg, V_d, X_d)
+        Z_anchor = self(bmg, V_d, X_d)
 
         bmg, V_d, X_d, target_candidates, _, _, _ = batch.candidates
-        Z_candidates = self.encoding(bmg, V_d, X_d)
+        Z_candidates = self(bmg, V_d, X_d)
 
         loss = self.interaction.interaction_loss(
             Z_anchor, Z_candidates, target_anchor, target_candidates, B, C
