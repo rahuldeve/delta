@@ -11,11 +11,26 @@ from data import GT, LT, DSThreshold
 from models.deltaprop.utils import score_all
 
 
-def build_discordancy_matrix(
+def build_hardness_matrix(
     raw_scores: np.ndarray,
     reference_scores: np.ndarray,
     nu: float,
+    margin: float = 0.3,
 ) -> np.ndarray:
+    """Per-pair training value, high for pairs the model orders wrongly or barely right.
+
+    ``margin`` sets how much of a correct-ordering lead still counts as hard. The
+    signed agreement ``m = sign(Δy)·net_model_pref`` runs from -1 (confidently
+    backwards) through 0 (undecided) to +1 (confidently right), and a pair survives
+    the ``np.maximum(row, 0)`` hinge in :func:`top_k_hardest` iff ``m < margin``. So
+    ``margin=0`` keeps only outright-discordant pairs (the original rule, reproduced
+    bit-for-bit), while ``margin>0`` also admits *near misses* — pairs the model gets
+    right but by a slim lead, which sit closest to its decision boundary and carry the
+    most signal. The ``|Δy|`` factor then weights sampling toward pairs whose ordering
+    label is unambiguous. Exact ties (``Δy == 0``) get ``m = 0`` and hardness 0 at any
+    margin, so they stay excluded — their ``a >= b`` label is true in both directions
+    and would be contradictory supervision.
+    """
     # Fail loudly if the model diverged — this is the only remaining NaN source
     # once the math below is stable, and silently swallowing it would hide it.
     if not np.isfinite(raw_scores).all():
@@ -34,12 +49,16 @@ def build_discordancy_matrix(
 
     ref_diff = reference_scores[:, None] - reference_scores[None, :]
 
-    D = -(ref_diff * net_model_pref)
+    # m in (-1, 1): how far the model agrees with the reference ordering. Note
+    # |ref_diff| * m == ref_diff * net_model_pref, so at margin=0 this is exactly
+    # the old D = -(ref_diff * net_model_pref).
+    m = np.sign(ref_diff) * net_model_pref
+    D = np.abs(ref_diff) * (margin - m)
     np.fill_diagonal(D, 0.0)
     return D
 
 
-def top_k_discordant(
+def top_k_hardest(
     D: np.ndarray,
     i: int,
     k: int,
@@ -47,22 +66,22 @@ def top_k_discordant(
     temperature: float = 1.0,
 ) -> list[int]:
     """
-    Return up to k indices most discordant with index i.
+    Return up to k indices forming the hardest pairs with index i.
 
     Args:
-        D:           (N, N) discordancy matrix from build_discordancy_matrix.
+        D:           (N, N) hardness matrix from build_hardness_matrix.
         i:           Query index.
         k:           Maximum number of hard negatives to return.
-        stochastic:  If True, sample proportional to discordancy (with temperature).
-                     If False, return strict top-k by discordancy.
+        stochastic:  If True, sample proportional to hardness (with temperature).
+                     If False, return strict top-k by hardness.
         temperature: Controls the sharpness of the sampling distribution.
-                     - 1.0  → sample proportional to raw discordancy (default)
+                     - 1.0  → sample proportional to raw hardness (default)
                      - >1.0 → flatter distribution, more exploration
                      - <1.0 → sharper distribution, closer to top-k behaviour
                      Must be > 0. Only used when stochastic=True.
 
     Returns:
-        List of at most k indices j ≠ i, sorted by discordancy descending.
+        List of at most k indices j ≠ i, sorted by hardness descending.
     """
     if not (0 <= i < D.shape[0]):
         raise IndexError(f"Index {i} out of bounds for matrix of size {D.shape[0]}.")
@@ -73,10 +92,12 @@ def top_k_discordant(
 
     row = D[i].copy()
     row[i] = 0.0
-    row = np.maximum(row, 0.0)  # mask out concordant pairs
+    # Hinge: drop pairs the model already orders correctly by more than `margin`
+    # (they have hardness < 0). At margin=0 this is the old concordant-pair mask.
+    row = np.maximum(row, 0.0)
 
-    total_discordancy = row.sum()
-    if total_discordancy <= 0:
+    total_hardness = row.sum()
+    if total_hardness <= 0:
         return []
 
     if stochastic:
@@ -113,7 +134,7 @@ class RandomPairDataset(Dataset):
         binary_threshold: DSThreshold,
         n_candidates: int,
         frac_hard: float = 0.2,
-        discordancy_degree: np.ndarray | None = None,
+        hardness: np.ndarray | None = None,
     ):
         super().__init__()
         self.anchor_dataset = anchor_dataset
@@ -121,7 +142,7 @@ class RandomPairDataset(Dataset):
         self.binary_threshold = binary_threshold
         self.n_candidates = n_candidates
         self.frac_hard = frac_hard
-        self.discordancy_degree = discordancy_degree
+        self.hardness = hardness
 
         # Precompute the positive/negative candidate index pools once. They depend only on
         # candidate_dataset.Y and binary_threshold (both fixed for the dataset's lifetime), so
@@ -134,13 +155,13 @@ class RandomPairDataset(Dataset):
         return len(self.anchor_dataset)
 
     def get_hard_neg_idxs(self, idx: int, n: int) -> list[int]:
-        if self.discordancy_degree is None:
+        if self.hardness is None:
             return []
 
         if n == 0:
             return []
 
-        return top_k_discordant(self.discordancy_degree, idx, n)
+        return top_k_hardest(self.hardness, idx, n)
 
     def _class_index_pools(self) -> tuple[np.ndarray, np.ndarray]:
         """Indices of candidate molecules in the positive / negative class.
@@ -226,6 +247,7 @@ class RandomPairDataModule(L.LightningDataModule):
         batch_size: int,
         n_candidates: int,
         frac_hard: float = 0.2,
+        hard_margin: float = 0.3,
         num_workers: int = 4,
         seed: int = 42,
     ) -> None:
@@ -249,9 +271,14 @@ class RandomPairDataModule(L.LightningDataModule):
 
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.hard_margin = hard_margin
         self.seed = seed
 
     def train_dataloader(self):
+        # Rebuilt here, so this must stay in step with the trainer's
+        # reload_dataloaders_every_n_epochs: at n=2 the matrix only refreshed on
+        # even epochs and odd epochs re-trained on a pool mined against a
+        # two-epoch-old model. Keep that setting at 1.
         if self.trainer is not None and self.trainer.current_epoch > 0:
             # assert self.trainer.model is not None
             train_mol_ds = self.train_ds.anchor_dataset
@@ -261,7 +288,7 @@ class RandomPairDataModule(L.LightningDataModule):
             with torch.no_grad():
                 nu = model.interaction.log_nu.exp().cpu().item()  # type: ignore
 
-            self.update_discordancy_mat_train(
+            self.update_hardness_mat_train(
                 theta_hat_train.cpu().numpy(),
                 nu,
             )
@@ -296,10 +323,10 @@ class RandomPairDataModule(L.LightningDataModule):
             num_workers=self.num_workers,
         )
 
-    def update_discordancy_mat_train(self, train_model_scores, nu: float):
+    def update_hardness_mat_train(self, train_model_scores, nu: float):
         reference_scores = self.train_ds.anchor_dataset.Y.squeeze()
-        self.train_ds.discordancy_degree = build_discordancy_matrix(
-            train_model_scores, reference_scores, nu
+        self.train_ds.hardness = build_hardness_matrix(
+            train_model_scores, reference_scores, nu, self.hard_margin
         )
 
 

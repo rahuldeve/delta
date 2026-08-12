@@ -155,6 +155,7 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             batch_size=train_config.batch_size,
             n_candidates=model_config.candidate_size,
             frac_hard=model_config.frac_hard,
+            hard_margin=model_config.hard_margin,
             seed=train_config.random_seed,
         )
 
@@ -167,7 +168,9 @@ class DeltapropRef(RefModel[DeltapropConfig]):
                 devices=1,
                 max_epochs=train_config.max_epochs,
                 num_sanity_val_steps=0,
-                reload_dataloaders_every_n_epochs=2,
+                # Must stay 1: RandomPairDataModule.train_dataloader() is where the
+                # hardness matrix is rebuilt, so anything higher trains on a stale one.
+                reload_dataloaders_every_n_epochs=1,
                 callbacks=[
                     EarlyStopping(
                         monitor="val_loss",
