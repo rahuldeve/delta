@@ -321,8 +321,10 @@ class RandomPairDataModule(L.LightningDataModule):
         )
 
     def val_dataloader(self):
-        # Seed the workers so the (random) validation candidate pairs are
-        # reproducible across runs, making val_loss a stable early-stopping signal.
+        # Seed the workers so the (random) validation candidate pairs are reproducible
+        # across runs, keeping val_loss comparable epoch to epoch. The tau/AUC/AP
+        # signals don't depend on the candidate draw at all — they only use the anchor
+        # λ and target, which are the same molecules however the pairs come out.
         return DataLoader(
             self.val_ds,
             batch_size=self.batch_size,

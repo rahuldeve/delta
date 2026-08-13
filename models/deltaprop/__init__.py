@@ -176,16 +176,23 @@ class DeltapropRef(RefModel[DeltapropConfig]):
                 # hardness matrix is rebuilt, so anything higher trains on a stale one.
                 reload_dataloaders_every_n_epochs=1,
                 callbacks=[
+                    # Kendall tau, not val_loss. The pairwise BCE keeps improving as the
+                    # projector inflates λ even after the ordering has stopped getting
+                    # better, so it selects too late: in balmy-snow-20 it bottomed at
+                    # epoch 22 while every ranking signal peaked at 10-13, costing 0.049
+                    # val AP. tau is scale-free and had the best range/jitter ratio (7.7
+                    # vs val_loss 5.9, AP 5.1, AUC 4.1) of the signals measured.
+                    # mode="max" matters — the default "min" would select the worst epoch.
                     EarlyStopping(
-                        monitor="val_loss",
-                        mode="min",
+                        monitor="val_kendall_tau",
+                        mode="max",
                         verbose=True,
                         patience=train_config.early_stopping_patience,
                     ),
                     ModelCheckpoint(
                         dirpath=ckpt_dir,
-                        monitor="val_loss",
-                        mode="min",
+                        monitor="val_kendall_tau",
+                        mode="max",
                         save_top_k=1,
                     ),
                     *(extra_callbacks or []),

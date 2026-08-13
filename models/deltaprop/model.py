@@ -304,9 +304,9 @@ class DeltaProp(pl.LightningModule):
     def on_validation_epoch_end(self) -> None:
         """Log a family of val ranking signals, all derived from the same (λ, y).
 
-        These are diagnostics only — `EarlyStopping`/`ModelCheckpoint` still monitor
-        `val_loss`. The point is to see, on one run, whether any of them locates a
-        sharper optimum than `val_loss` does:
+        ``val_kendall_tau`` is what `EarlyStopping`/`ModelCheckpoint` monitor (mode
+        "max"); the rest are diagnostics kept alongside it so the selection rule stays
+        auditable:
 
         - ``val_kendall_tau``  tau-b over all pairs. Scale-free, unlike `val_loss`:
           BCE keeps improving as the projector inflates λ even when the ordering is
