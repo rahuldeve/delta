@@ -24,23 +24,6 @@ from models.deltaprop.data import RandomPairTrainBatch
 logger = logging.getLogger(__name__)
 
 
-def boundary_weighted_tau(lam: "np.ndarray", y: "np.ndarray", w: "np.ndarray") -> float:
-    """Concordance between λ and y, with each pair weighted by ``w_i · w_j``.
-
-    Gamma-style normalisation: pairs tied in y (there are many — the target is
-    quantised to 1% steps) drop out of both numerator and denominator rather than
-    being corrected for as tau-b does. So the *level* is not comparable to
-    ``val_kendall_tau``; compare trajectories and argmax, not absolute values.
-
-    O(n²), which is ~1.7M pairs and a few ms at the 1318-molecule val size.
-    """
-    sy = np.sign(y[:, None] - y[None, :]).astype(np.float32)
-    sl = np.sign(lam[:, None] - lam[None, :]).astype(np.float32)
-    W = (w[:, None] * w[None, :]).astype(np.float32)
-    den = float((W * np.abs(sy) * np.abs(sl)).sum())
-    return float((W * sy * sl).sum() / den) if den > 0 else float("nan")
-
-
 class Encoder(nn.Module, HyperparametersMixin):
     def __init__(
         self,
@@ -294,7 +277,9 @@ class DeltaProp(pl.LightningModule):
         # across the epoch reconstructs λ for the whole split.
         lam = self.interaction.projector(Z_anchor).squeeze(-1)
         self._val_lambdas.append(lam.detach().float().cpu())
-        self._val_targets.append(target_anchor.detach().float().cpu().reshape(-1))
+        self._val_targets.append(
+            target_anchor.detach().float().cpu().reshape(-1)  # type: ignore[union-attr]
+        )
         return loss
 
     def on_validation_epoch_start(self) -> None:
@@ -314,18 +299,16 @@ class DeltaProp(pl.LightningModule):
           ties are everywhere. No GT/LT handling — the training label is
           `target_anchor >= target_candidates` on the *continuous* target, so λ rises
           with y on every dataset, and negating for LT would just report −tau.
-        - ``val_tau_w0p1`` / ``val_tau_w0p2``  the same concordance, but weighting each
-          pair by ``w_i·w_j`` with ``w = exp(-|y-τ|/h)`` — how close *both* members sit
-          to the class boundary. Note this is not a path toward ROC-AUC: AUC restricts
-          to τ-*straddling* pairs, which can be far apart in y, whereas this restricts
-          to pairs clustered *at* τ, which are near-ties and intrinsically much harder.
-          Measured on a realistic model, narrowing h drives it 0.34 → 0.09 while
-          2·AUC−1 sits at 0.66. Small h also thins the sample fast (h=0.1 leaves ~158
-          effective molecules of 1318), so expect the tight variants to be jittery —
-          which is part of what this run is meant to quantify.
         - ``val_ep_roc_auc`` / ``val_ep_ap``  the binary task, per epoch. Equal to the
           reported final metrics because `davidson_threshold_probs` is monotone in λ,
           so no λ_τ and no train-set pass are needed to rank.
+
+        Boundary-weighted variants of tau were tried here and dropped: weighting pairs
+        by proximity to τ roughly doubled the jitter (0.0089 → 0.0186) without widening
+        the usable range, giving the worst range/jitter of any signal measured (3.6 vs
+        plain tau's 7.7), and correlated +0.71/+0.86 with plain tau anyway. Thinning to
+        the boundary costs effective sample size — h=0.1 leaves ~158 of 1318 molecules —
+        without sharpening anything.
         """
         if not self._val_lambdas:
             return
@@ -333,18 +316,15 @@ class DeltaProp(pl.LightningModule):
         lam = torch.cat(self._val_lambdas).numpy().astype(np.float64)
         y = torch.cat(self._val_targets).numpy().astype(np.float64)
 
-        self.log("val_kendall_tau", float(kendalltau(lam, y)[0]), prog_bar=True)
+        # .statistic is present on scipy's SignificanceResult; the shipped stubs model
+        # the return as a bare tuple, hence the ignore.
+        tau = float(kendalltau(lam, y).statistic)  # type: ignore[union-attr]
+        self.log("val_kendall_tau", tau, prog_bar=True)
 
         th = getattr(self, "df_classification_threshold", None)
         if th is None:
             return
         tau_cut = float(th.th)
-
-        for h in (0.1, 0.2):
-            w = np.exp(-np.abs(y - tau_cut) / h)
-            self.log(
-                f"val_tau_w{h:.1f}".replace(".", "p"), boundary_weighted_tau(lam, y, w)
-            )
 
         # Unlike tau, the binary task *does* need the threshold direction: for LT the
         # actives sit at low y, hence low λ, so the ranking has to be inverted.
