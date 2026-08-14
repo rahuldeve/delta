@@ -32,6 +32,10 @@ class Block(nn.Module):
         self.skip = (nn.Identity() if input_dim == output_dim
                      else nn.Linear(input_dim, output_dim, bias=False))
 
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+
     def forward(self, x):
         h = self.fc1(self.norm(x))
         a, b = h.chunk(2, dim=-1)
@@ -71,11 +75,11 @@ class Encoder(nn.Module, HyperparametersMixin):
 
     @property
     def input_dim(self):
-        return self.ffn.input_dim
+        return self.ffn[0].input_dim
 
     @property
     def output_dim(self):
-        return self.ffn.output_dim
+        return self.ffn[0].output_dim
 
 
 class Interaction(torch.nn.Module, HyperparametersMixin):
