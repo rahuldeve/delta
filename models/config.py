@@ -34,8 +34,8 @@ class DeltapropConfig(ModelConfig):
     # LayerNorm/BatchNorm gains and the Davidson tie parameter are exempt.
     # 0.0 makes the optimizer identical to plain Adam.
     weight_decay: float = 0.01
-    candidate_size: int = 32
-    frac_hard: float = 0.2
+    candidate_size: int = 24
+    frac_hard: float = 0.5
     # Half-width of the band around the decision boundary that counts as hard.
     # Mining peaks on pairs the model is undecided about and falls to zero at
     # |agreement| = hard_band; smaller values keep only the truly undecided.
