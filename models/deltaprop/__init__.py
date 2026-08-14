@@ -132,6 +132,7 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             interaction,
             X_d_transform=X_d_transform,
             batch_norm=model_config.batch_norm,
+            weight_decay=model_config.weight_decay,
         )
 
         return DeltapropRef(model)

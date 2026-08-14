@@ -30,6 +30,10 @@ class DeltapropConfig(ModelConfig):
     encoder_dropout: float = 0.1
     batch_norm: bool = False
     interaction_dropout: float = 0.1
+    # Decoupled (AdamW) weight decay, applied to weight matrices only — biases,
+    # LayerNorm/BatchNorm gains and the Davidson tie parameter are exempt.
+    # 0.0 makes the optimizer identical to plain Adam.
+    weight_decay: float = 0.01
     candidate_size: int = 32
     frac_hard: float = 0.2
     # Half-width of the band around the decision boundary that counts as hard.

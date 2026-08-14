@@ -151,6 +151,7 @@ class DeltaProp(pl.LightningModule):
         init_lr: float = 1e-4,
         max_lr: float = 1e-3,
         final_lr: float = 1e-4,
+        weight_decay: float = 0.0,
         X_d_transform: ScaleTransform | None = None,
     ) -> None:
         super().__init__()
@@ -185,6 +186,7 @@ class DeltaProp(pl.LightningModule):
         self.init_lr = init_lr
         self.max_lr = max_lr
         self.final_lr = final_lr
+        self.weight_decay = weight_decay
 
         self.loss_fn = nn.BCEWithLogitsLoss()
 
@@ -318,8 +320,32 @@ class DeltaProp(pl.LightningModule):
             )
         self.log("val_kendall_tau", tau, prog_bar=True)
 
+    def param_groups(self) -> list[dict]:
+        """Split parameters into decayed and decay-exempt groups.
+
+        Only weight matrices (ndim >= 2) are decayed. Everything 1-D or scalar is
+        exempt: biases, LayerNorm/BatchNorm gains, and — the one that actually
+        matters here — `interaction.log_nu`. Decaying log ν pulls ν toward 1, i.e.
+        toward a model that calls every pair a tie, which is a prior on the
+        Davidson tie rate rather than capacity control.
+        """
+        decay, no_decay = [], []
+        for p in self.parameters():
+            if not p.requires_grad:
+                continue
+            (decay if p.ndim >= 2 else no_decay).append(p)
+
+        return [
+            {"params": decay, "weight_decay": self.weight_decay},
+            {"params": no_decay, "weight_decay": 0.0},
+        ]
+
     def configure_optimizers(self):  # type: ignore
-        opt = optim.Adam(self.parameters(), self.init_lr)
+        # AdamW, not Adam: decoupled decay. At weight_decay=0.0 (the default) the
+        # two are numerically identical, so this does not move the unregularised
+        # baseline. build_NoamLike_LRSched is a single-lambda LambdaLR, which
+        # broadcasts the same schedule over both param groups.
+        opt = optim.AdamW(self.param_groups(), self.init_lr)
         if self.trainer.train_dataloader is None:
             # Loading `train_dataloader` to estimate number of training batches.
             # Using this line of code can pypass the issue of using `num_training_batches` as described [here](https://github.com/Lightning-AI/pytorch-lightning/issues/16060).
