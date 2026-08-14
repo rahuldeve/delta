@@ -24,18 +24,18 @@ class DeltapropConfig(ModelConfig):
     mp_d_h: int = 300
     mp_depth: int = 3
     mp_dropout: float = 0.0
-    encoder_hidden_dim: int = 300
+    encoder_hidden_dim: int = 600
     encoder_output_dim: int = 300
-    encoder_n_layers: int = 2
+    encoder_n_layers: int = 4
     encoder_dropout: float = 0.1
     batch_norm: bool = False
-    interaction_dropout: float = 0.0
+    interaction_dropout: float = 0.1
     candidate_size: int = 32
     frac_hard: float = 0.2
     # Half-width of the band around the decision boundary that counts as hard.
     # Mining peaks on pairs the model is undecided about and falls to zero at
     # |agreement| = hard_band; smaller values keep only the truly undecided.
-    hard_band: float = 0.6
+    hard_band: float = 1.0
     use_chameleon_mp: bool = False
 
 

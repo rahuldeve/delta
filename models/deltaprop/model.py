@@ -48,7 +48,7 @@ class Encoder(nn.Module, HyperparametersMixin):
 
     def forward(self, H: Tensor, X_d: Tensor | None, alpha: float) -> Tensor:
         if X_d is None:
-            return self.ffn(H)
+            return H + self.ln(self.ffn(H))
         else:
             Z = torch.cat((H.detach(), alpha * X_d), dim=1)
             Z = self.ln(self.ffn(Z))
@@ -76,6 +76,10 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
                 torch.nn.Dropout(dropout),
                 torch.nn.Linear(ndims, 1),
             ]
+        )
+
+        self.ffn = MLP.build(
+            ndims, 1, ndims, 2, dropout, "relu"
         )
 
         self.eps = 1e-8
