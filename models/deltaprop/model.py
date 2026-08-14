@@ -69,16 +69,7 @@ class Interaction(torch.nn.Module, HyperparametersMixin):
         self.save_hyperparameters()
         self.hparams["cls"] = self.__class__
 
-        self.projector = torch.nn.Sequential(
-            *[
-                torch.nn.Linear(ndims, ndims),
-                torch.nn.ReLU(),
-                torch.nn.Dropout(dropout),
-                torch.nn.Linear(ndims, 1),
-            ]
-        )
-
-        self.ffn = MLP.build(
+        self.projector = MLP.build(
             ndims, 1, ndims, 2, dropout, "relu"
         )
 
