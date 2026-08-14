@@ -38,16 +38,16 @@ def build_command(model: str, dataset: str, split: str, use_feats: bool) -> str:
     # PK is tiny: fewer folds. Everything else uses the default 5.
     parts.append("--train-cf.n-splits 2" if dataset == "PK" else "--train-cf.n-splits 5")
 
-    # Larger batch for the big dataset on the GPU models.
-    if dataset == "GSK_HEPG2" and model in ("chemprop", "deltaprop"):
-        parts.append("--train-cf.batch-size 256")
+    # # Larger batch for the big dataset on the GPU models.
+    # if dataset == "GSK_HEPG2" and model in ("chemprop", "deltaprop"):
+    #     parts.append("--train-cf.batch-size 256")
 
     if use_feats:
         parts.append("--train-cf.use-feats")
 
-    # deltaprop pairwise-ranking candidate pool size (only needed on the big dataset).
-    if model == "deltaprop" and dataset == "GSK_HEPG2":
-        parts.append("--model-cf.candidate-size 12")
+    # # deltaprop pairwise-ranking candidate pool size (only needed on the big dataset).
+    # if model == "deltaprop" and dataset == "GSK_HEPG2":
+    #     parts.append("--model-cf.candidate-size 12")
 
     parts.append(f"wandb-cf:wandb-enabled --wandb-cf.project-name {WANDB_PROJECT}")
 
