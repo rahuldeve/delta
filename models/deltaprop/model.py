@@ -22,6 +22,22 @@ from models.deltaprop.data import RandomPairTrainBatch
 logger = logging.getLogger(__name__)
 
 
+class Block(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, p=0.1):
+        super().__init__()
+        self.norm = nn.LayerNorm(input_dim)
+        self.fc1  = nn.Linear(input_dim, 2 * hidden_dim)
+        self.fc2  = nn.Linear(hidden_dim, output_dim)
+        self.drop = nn.Dropout(p)
+        self.skip = (nn.Identity() if input_dim == output_dim
+                     else nn.Linear(input_dim, output_dim, bias=False))
+
+    def forward(self, x):
+        h = self.fc1(self.norm(x))
+        a, b = h.chunk(2, dim=-1)
+        return self.skip(x) + self.drop(self.fc2(torch.nn.functional.silu(a) * b))
+
+
 class Encoder(nn.Module, HyperparametersMixin):
     def __init__(
         self,
@@ -40,19 +56,18 @@ class Encoder(nn.Module, HyperparametersMixin):
         self.hparams["activation"] = activation
         self.hparams["cls"] = self.__class__
 
-        self.ffn = MLP.build(
-            input_dim, output_dim, hidden_dim, n_layers, dropout, activation
-        )
-
-        self.ln = nn.LayerNorm(output_dim)
+        self.ffn = torch.nn.Sequential(*[
+            Block(input_dim, hidden_dim, output_dim, dropout)
+            for _ in range(n_layers)
+        ])
 
     def forward(self, H: Tensor, X_d: Tensor | None, alpha: float) -> Tensor:
         if X_d is None:
-            return H + self.ln(self.ffn(H))
+            return self.ffn(H)
         else:
             Z = torch.cat((H.detach(), alpha * X_d), dim=1)
-            Z = self.ln(self.ffn(Z))
-            return Z + H
+            Z = self.ffn(Z)
+            return Z
 
     @property
     def input_dim(self):
