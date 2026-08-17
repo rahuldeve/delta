@@ -23,23 +23,19 @@ logger = logging.getLogger(__name__)
 
 
 class Block(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, p=0.1):
+    def __init__(self, dim, p=0.1):
         super().__init__()
-        self.norm = nn.LayerNorm(input_dim)
-        self.fc1  = nn.Linear(input_dim, 2 * hidden_dim)
-        self.fc2  = nn.Linear(hidden_dim, output_dim)
+        self.norm = nn.LayerNorm(dim)
+        self.fc1  = nn.Linear(dim, 2 * dim)
+        self.fc2  = nn.Linear(dim, dim)
         self.drop = nn.Dropout(p)
-        self.skip = (nn.Identity() if input_dim == output_dim
-                     else nn.Linear(input_dim, output_dim, bias=False))
 
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
-        self.output_dim = output_dim
+        self.dim = dim
 
     def forward(self, x):
         h = self.fc1(self.norm(x))
         a, b = h.chunk(2, dim=-1)
-        return self.skip(x) + self.drop(self.fc2(torch.nn.functional.silu(a) * b))
+        return x + self.drop(self.fc2(torch.nn.functional.silu(a) * b))
 
 
 class Encoder(nn.Module, HyperparametersMixin):
@@ -60,26 +56,29 @@ class Encoder(nn.Module, HyperparametersMixin):
         self.hparams["activation"] = activation
         self.hparams["cls"] = self.__class__
 
+        self.in_proj = torch.nn.Linear(input_dim, hidden_dim)
         self.ffn = torch.nn.Sequential(*[
-            Block(input_dim, hidden_dim, output_dim, dropout)
+            Block(hidden_dim, dropout)
             for _ in range(n_layers)
         ])
+        # Blocks are pre-norm, so each normalises its *input* only and the residual
+        # stream leaves the stack unnormalised (and growing with depth). Normalise once
+        # more before out_proj, as every pre-norm stack does, to keep the scale that λ
+        # is read off from from drifting.
+        self.final_norm = torch.nn.LayerNorm(hidden_dim)
+        self.out_proj = torch.nn.Linear(hidden_dim, output_dim)
 
     def forward(self, H: Tensor, X_d: Tensor | None, alpha: float) -> Tensor:
-        if X_d is None:
-            return self.ffn(H)
-        else:
-            Z = torch.cat((H.detach(), alpha * X_d), dim=1)
-            Z = self.ffn(Z)
-            return Z
+        Z = H if X_d is None else torch.cat((H.detach(), alpha * X_d), dim=1)
+        return self.out_proj(self.final_norm(self.ffn(self.in_proj(Z))))
 
     @property
     def input_dim(self):
-        return self.ffn[0].input_dim
+        return self.in_proj.in_features
 
     @property
     def output_dim(self):
-        return self.ffn[0].output_dim
+        return self.out_proj.out_features
 
 
 class Interaction(torch.nn.Module, HyperparametersMixin):
