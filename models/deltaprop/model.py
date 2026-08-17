@@ -69,7 +69,7 @@ class Encoder(nn.Module, HyperparametersMixin):
         self.out_proj = torch.nn.Linear(hidden_dim, output_dim)
 
     def forward(self, H: Tensor, X_d: Tensor | None, alpha: float) -> Tensor:
-        Z = H if X_d is None else torch.cat((H.detach(), alpha * X_d), dim=1)
+        Z = H if X_d is None else torch.cat((H, alpha * X_d), dim=1)
         return self.out_proj(self.final_norm(self.ffn(self.in_proj(Z))))
 
     @property
