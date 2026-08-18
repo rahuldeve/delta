@@ -32,6 +32,7 @@ class DeltapropConfig(ModelConfig):
     interaction_dropout: float = 0.0
     candidate_size: int = 32
     frac_hard: float = 0.2
+    hard_band: float = 1.0
     use_chameleon_mp: bool = False
 
 
