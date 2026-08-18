@@ -8,7 +8,6 @@ import torch
 from chemprop.conf import DEFAULT_HIDDEN_DIM
 from chemprop.data import BatchMolGraph, TrainingBatch
 from chemprop.nn import Aggregation, MessagePassing
-from chemprop.nn.ffn import MLP
 from chemprop.nn.transforms import ScaleTransform
 from chemprop.schedulers import build_NoamLike_LRSched
 from lightning import pytorch as pl
@@ -18,6 +17,22 @@ from torch import Tensor, nn, optim
 from models.deltaprop.data import RandomPairTrainBatch
 
 logger = logging.getLogger(__name__)
+
+
+class Block(nn.Module):
+    def __init__(self, dim, p=0.1):
+        super().__init__()
+        self.norm = nn.LayerNorm(dim)
+        self.fc1  = nn.Linear(dim, 2 * dim)
+        self.fc2  = nn.Linear(dim, dim)
+        self.drop = nn.Dropout(p)
+
+        self.dim = dim
+
+    def forward(self, x):
+        h = self.fc1(self.norm(x))
+        a, b = h.chunk(2, dim=-1)
+        return x + self.drop(self.fc2(torch.nn.functional.silu(a) * b))
 
 
 class Encoder(nn.Module, HyperparametersMixin):
@@ -38,28 +53,30 @@ class Encoder(nn.Module, HyperparametersMixin):
         self.hparams["activation"] = activation
         self.hparams["cls"] = self.__class__
 
-        self.ffn = MLP.build(
-            input_dim, output_dim, hidden_dim, n_layers, dropout, activation
-        )
+        self.in_proj = torch.nn.Linear(input_dim, hidden_dim)
+        self.ffn = torch.nn.Sequential(*[
+            Block(hidden_dim, dropout)
+            for _ in range(n_layers)
+        ])
+        # Blocks are pre-norm, so each normalises its *input* only and the residual
+        # stream leaves the stack unnormalised (and growing with depth). Normalise once
+        # more before out_proj, as every pre-norm stack does, to keep the scale that λ
+        # is read off from from drifting.
+        self.final_norm = torch.nn.LayerNorm(hidden_dim)
+        self.out_proj = torch.nn.Linear(hidden_dim, output_dim)
 
-        self.ln = nn.LayerNorm(output_dim)
-
-    def forward(self, H: Tensor, X_d: Tensor | None, alpha: float) -> Tensor:        
-        if X_d is None:
-            return self.ffn(H)
-        else:
-            Z = torch.cat((H.detach(), alpha * X_d), dim=1)
-            Z = self.ln(self.ffn(Z))
-            return Z + H
+    def forward(self, H: Tensor, X_d: Tensor | None, alpha: float) -> Tensor:
+        Z = H if X_d is None else torch.cat((H, alpha * X_d), dim=1)
+        return self.out_proj(self.final_norm(self.ffn(self.in_proj(Z))))
 
 
     @property
     def input_dim(self):
-        return self.ffn.input_dim
+        return self.in_proj.in_features
 
     @property
     def output_dim(self):
-        return self.ffn.output_dim
+        return self.out_proj.out_features
 
 
 class Interaction(torch.nn.Module, HyperparametersMixin):
