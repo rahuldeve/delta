@@ -80,19 +80,12 @@ class Encoder(nn.Module, HyperparametersMixin):
 
 
 class Interaction(torch.nn.Module, HyperparametersMixin):
-    def __init__(self, ndims: int, dropout: float = 0.0) -> None:
+    def __init__(self, ndims: int) -> None:
         super().__init__()
         self.save_hyperparameters()
         self.hparams["cls"] = self.__class__
 
-        self.projector = torch.nn.Sequential(
-            *[
-                torch.nn.Linear(ndims, ndims),
-                torch.nn.ReLU(),
-                torch.nn.Dropout(dropout),
-                torch.nn.Linear(ndims, 1),
-            ]
-        )
+        self.projector = torch.nn.Linear(ndims, 1)
 
         self.eps = 1e-8
         self.log_nu = nn.Parameter(torch.tensor(math.log(0.1)))
