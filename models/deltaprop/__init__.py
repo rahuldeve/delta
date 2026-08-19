@@ -116,7 +116,9 @@ class DeltapropRef(RefModel[DeltapropConfig]):
             dropout=model_config.encoder_dropout,
             activation="elu",
         )
-        interaction = Interaction(encoder.output_dim)
+        interaction = Interaction(
+            encoder.output_dim, dropout=model_config.interaction_dropout
+        )
 
         X_d_transform = (
             ScaleTransform.from_standard_scaler(X_d_scaler)
