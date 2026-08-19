@@ -13,6 +13,7 @@ from chemprop.nn.transforms import ScaleTransform
 from chemprop.schedulers import build_NoamLike_LRSched
 from lightning import pytorch as pl
 from lightning.pytorch.core.mixins.hparams_mixin import HyperparametersMixin
+from scipy.stats import kendalltau
 from torch import Tensor, nn, optim
 
 from models.deltaprop.data import RandomPairTrainBatch
@@ -194,6 +195,10 @@ class DeltaProp(pl.LightningModule):
 
         self.loss_fn = nn.BCEWithLogitsLoss()
 
+        # Per-epoch buffers for the validation ranking metric
+        self._val_lambdas: list[Tensor] = []
+        self._val_targets: list[Tensor] = []
+
     # def fingerprint(
     #     self, bmg: BatchMolGraph, V_d: Tensor | None = None, X_d: Tensor | None = None
     # ) -> Tensor:
@@ -235,6 +240,11 @@ class DeltaProp(pl.LightningModule):
         return dict(embeds=Z, targets=target)
 
     def get_losses(self, batch: RandomPairTrainBatch):
+        """Return `(loss, Z_anchor, target_anchor)`.
+
+        The anchor embedding and its target are handed back so validation can score
+        the ranking without a second forward pass — see `on_validation_epoch_end`.
+        """
         B, C = batch.B, batch.C
 
         bmg, V_d, X_d, target_anchor, _, _, _ = batch.anchor
@@ -247,7 +257,7 @@ class DeltaProp(pl.LightningModule):
             Z_anchor, Z_candidates, target_anchor, target_candidates, B, C
         )
 
-        return loss
+        return loss, Z_anchor, target_anchor
 
     def on_validation_model_eval(self) -> None:
         self.eval()
@@ -256,15 +266,45 @@ class DeltaProp(pl.LightningModule):
         self.X_d_transform.train()
 
     def training_step(self, batch: RandomPairTrainBatch, batch_idx):  # type: ignore
-        loss = self.get_losses(batch)
+        loss, _, _ = self.get_losses(batch)
         self.log("train_loss", loss, batch_size=batch.B, prog_bar=True, on_epoch=True)
         return loss
 
     def validation_step(self, batch: RandomPairTrainBatch, batch_idx):  # type: ignore
-        loss = self.get_losses(batch)
+        loss, Z_anchor, target_anchor = self.get_losses(batch)
         self.log("val_loss", loss, batch_size=batch.B, prog_bar=True, on_epoch=True)
+
+        # Every val molecule appears exactly once as an anchor (val_dataloader is
+        # shuffle=False and val_ds[idx] anchors on val_mol_ds[idx]), so stacking these
+        # across the epoch reconstructs λ for the whole split. The projector is a
+        # two-layer MLP on already-computed encodings, so this costs nothing next to
+        # the message passing that produced `Z_anchor`.
+        lam = self.interaction.projector(Z_anchor).squeeze(-1)
+        self._val_lambdas.append(lam.detach().float().cpu())
+        self._val_targets.append(
+            target_anchor.detach().float().cpu().reshape(-1)  # type: ignore[union-attr]
+        )
         return loss
-    
+
+    def on_validation_epoch_start(self) -> None:
+        self._val_lambdas.clear()
+        self._val_targets.clear()
+
+    def on_validation_epoch_end(self) -> None:
+        """Log Kendall's tau-b between the val strengths λ and the continuous targets."""
+        if not self._val_lambdas:
+            return
+
+        lam = torch.cat(self._val_lambdas).double().numpy()
+        y = torch.cat(self._val_targets).double().numpy()
+
+        tau = float(kendalltau(lam, y).statistic)  # type: ignore[union-attr]
+        self.log(
+            "val_kendall_tau",
+            0.0 if math.isnan(tau) else tau,
+            prog_bar=True,
+        )
+
     def configure_optimizers(self):  # type: ignore
         opt = optim.Adam(self.parameters(), self.init_lr)
         if self.trainer.train_dataloader is None:

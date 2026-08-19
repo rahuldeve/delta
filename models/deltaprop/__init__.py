@@ -171,15 +171,15 @@ class DeltapropRef(RefModel[DeltapropConfig]):
                 reload_dataloaders_every_n_epochs=1,
                 callbacks=[
                     EarlyStopping(
-                        monitor="val_loss",
-                        mode="min",
+                        monitor="val_kendall_tau",
+                        mode="max",
                         verbose=True,
                         patience=train_config.early_stopping_patience,
                     ),
                     ModelCheckpoint(
                         dirpath=ckpt_dir,
-                        monitor="val_loss",
-                        mode="min",
+                        monitor="val_kendall_tau",
+                        mode="max",
                         save_top_k=1,
                     ),
                     *(extra_callbacks or []),
