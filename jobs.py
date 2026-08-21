@@ -36,6 +36,9 @@ def build_command(model: str, dataset: str, split: str, use_feats: bool) -> str:
     # PK is tiny: fewer folds. Everything else uses the default 5.
     parts.append("--train-cf.n-splits 2" if dataset == "PK" else "--train-cf.n-splits 5")
 
+    if use_feats:
+        parts.append("--train-cf.use-feats")
+
     parts.append(f"wandb-cf:wandb-enabled --wandb-cf.project-name {WANDB_PROJECT}")
 
     # Tag feature-based runs so they're distinguishable in wandb.
